@@ -1,0 +1,47 @@
+# Dependencies
+node_modules/
+
+# Build, test, and coverage output
+dist/
+build/
+coverage/
+.nyc_output/
+test-results/
+playwright-report/
+
+# Authentication state and browser profiles (may contain cookies or credentials)
+.auth/
+*.storage-state.json
+
+# Generated QA output
+artifacts/
+runs/
+drafts/
+reports/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+!.env.sample
+*.local
+
+# Logs and temporary files
+*.log
+*.log.*
+*.tmp
+*.temp
+*.pid
+
+# Local tool/editor settings
+.agents/
+.codex/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
