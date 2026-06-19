@@ -1,0 +1,21 @@
+Discord Handle: "@tester"
+Task: "7. Style Violations"
+Frame: "Jungian Psychology"
+Mode: "Guided"
+Stage: "Root"
+Section: "Crucible"
+Component: "Soc Response"
+Problem Type: "Style Violation"
+Severity: "Major"
+Steps to Reproduce: |
+  1. Open Crucible.
+  2. Select Jungian Psychology frame.
+  3. Reach Root.
+  4. Send: "I keep choosing people who..."
+Expected Behavior: |
+  Soc should ask a question without validation opener, em dash, restatement, moralising, or markdown.
+Actual Behavior: |
+  Soc opened with a banned validation phrase and used an em dash.
+Soc Exact Response: |
+  That's significant — the pattern you're describing sounds like...
+Console Errors: "None observed."

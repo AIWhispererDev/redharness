@@ -1,0 +1,202 @@
+id: pocket-socrates
+name: Pocket Socrates
+type: ai-reflection-app
+baseUrl: https://pocketsoc.me
+
+issueTypes:
+  - AI Quality
+  - Functional Bug
+  - UI Bug
+  - Copy/UX
+  - Style Violation
+
+severities:
+  Blocker: cannot complete the session
+  Major: core path significantly degraded
+  Minor: noticeable but workable
+  Polish: copy, layout, or minor UX friction
+
+bounty:
+  Blocker: $25
+  Major: $15
+  Minor: $10
+  Polish: $0, or $5 for language feedback
+
+tracks:
+  basics:
+    tasks:
+      - id: b1
+        name: TOS Gate
+        mapsTo: "0. TOS Gate"
+      - id: b2
+        name: Full Thread Default Frame
+        mapsTo: "1. Default Frame"
+      - id: b3
+        name: Restart Protocol
+        mapsTo: "6. Restart Protocol"
+      - id: b4
+        name: Record Inspection + Export
+        mapsTo: "8. Record Inspection + Export"
+  full:
+    tasks:
+      - id: f0
+        name: TOS Gate
+        mapsTo: "0. TOS Gate"
+      - id: f1
+        name: Full Thread Default Frame
+        mapsTo: "1. Default Frame"
+      - id: f2
+        name: Claimed Tradition Frame
+        mapsTo: "2. Claimed Frame"
+      - id: f3
+        name: Named Door Test
+        mapsTo: "3. Named Door"
+      - id: f4
+        name: Echo Observation
+        mapsTo: "4. Echo Observation"
+      - id: f5
+        name: Return Thread + Workshop
+        mapsTo: "5. Return Thread + Workshop"
+      - id: f6
+        name: Restart Protocol
+        mapsTo: "6. Restart Protocol"
+      - id: f7
+        name: Style Violations Check
+        mapsTo: "7. Style Violations"
+      - id: f8
+        name: Record Inspection + Export
+        mapsTo: "8. Record Inspection + Export"
+
+reports:
+  core:
+    title: Core QA Feedback
+    requiredFields:
+      - Discord Handle
+      - Task
+      - Frame
+      - Mode
+      - Stage
+      - Section
+      - Component
+      - Problem Type
+      - Severity
+      - Steps to Reproduce
+      - Expected Behavior
+      - Actual Behavior
+      - Soc Exact Response
+      - Console Errors
+    aiQualityTypes:
+      - AI Quality
+      - Style Violation
+  peer:
+    title: Peer QA Feedback
+    requiredFields:
+      - Discord Handle
+      - Section
+      - Component
+      - Problem Type
+      - Severity
+      - Steps to Reproduce
+      - Expected Behavior
+      - Actual Behavior
+      - Soc Exact Response
+      - Partner Discord Handle
+      - Whose Perspective
+      - Console Errors
+  language:
+    title: Language QA Feedback
+    requiredFields:
+      - Title
+      - Discord Handle
+      - Language
+      - Frame
+      - Dimension
+      - Severity
+      - Expected Behavior
+      - Actual Behavior
+      - Soc Exact Response
+      - Notes
+
+smoke:
+  publicRoutes:
+    - path: /landing
+      titleIncludes: Pocket Socrates
+      textIncludes:
+        - Walk into therapy
+        - Launch the App
+    - path: /how-it-works
+      titleIncludes: How It Works
+      textIncludes:
+        - How to use Pocket Soc
+        - Your Mind Map
+    - path: /privacy-architecture
+      titleIncludes: Privacy Architecture
+      textIncludes:
+        - "Pocket Socrates: Privacy Architecture"
+        - Identity resolution
+    - path: /privacy
+      titleIncludes: Privacy
+      textIncludes:
+        - "Pocket Socrates: Privacy"
+    - path: /terms
+      titleIncludes: Terms of Service
+      textIncludes:
+        - Coming Soon
+    - path: /privacy-policy
+      titleIncludes: Privacy Policy
+      textIncludes:
+        - Coming Soon
+    - path: /early-access
+      titleIncludes: Pocket Socrates
+      textIncludes:
+        - Enter your invite code
+        - Pocket Socrates is invite-only during early access.
+
+browserSmoke:
+  earlyAccess:
+    path: /early-access
+    requiredModalTexts:
+      - Before you continue
+      - Please read and accept both documents to access Pocket Socrates.
+      - Accept & Continue
+    requiredCheckboxCount: 3
+    blankInviteExpectedText: Enter your invite code
+
+rules:
+  - id: no-em-dash
+    label: Soc must not use em dash
+    type: text
+    target: ai_response
+    pattern: "—"
+    issueType: Style Violation
+    severity: Major
+
+  - id: no-validation-openers
+    label: Soc must not open with banned validation phrases
+    type: text
+    target: ai_response
+    patterns:
+      - "^That's significant"
+      - "^I hear you"
+      - "^That's a powerful observation"
+    issueType: Style Violation
+    severity: Major
+
+  - id: no-sitting-with-there
+    label: Soc must not use sitting-with-there phrasing
+    type: text
+    target: ai_response
+    pattern: "there'?s something worth sitting with there"
+    issueType: Style Violation
+    severity: Major
+
+  - id: no-markdown-formatting
+    label: Soc response must not use markdown formatting
+    type: text
+    target: ai_response
+    patterns:
+      - "\\*\\*[^*]+\\*\\*"
+      - "^\\s*[-*]\\s+"
+      - "^\\s*#{1,6}\\s+"
+    issueType: Style Violation
+    severity: Major
