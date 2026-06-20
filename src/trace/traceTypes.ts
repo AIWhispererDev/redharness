@@ -137,9 +137,11 @@ export type RecordedAction =
 export type FindingLifecycleState =
   | 'observed'
   | 'suspected'
+  | 'needs-authoring'
   | 'confirmed-semantic'
   | 'confirmed-evidence'
   | 'confirmed-state-harm'
+  | 'rejected'
   | 'mitigated'
   | 'regression';
 
