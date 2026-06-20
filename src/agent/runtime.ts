@@ -23,6 +23,7 @@ import { BudgetTracker } from './budgets.js';
 import { PolicyEngine } from './policyEngine.js';
 import { CheckpointManager } from './checkpoints.js';
 import { RepeatedActionDetector, LoopDetector, StallDetector, type StopConditionCheck } from './stopConditions.js';
+import { BrowserSessionManager } from './browser/sessionManager.js';
 import type { ExecutionStatus } from '../core/status.js';
 import type { BudgetConsumption } from './agentTypes.js';
 
@@ -135,6 +136,8 @@ export class AgentRuntime {
   /** Cancel the run. */
   cancel(): void {
     this.abortController.abort();
+    // Trigger browser cleanup asynchronously
+    BrowserSessionManager.getInstance().closeSession(this.runId).catch(() => {});
   }
 
   /** Get current agent state. */
@@ -148,6 +151,11 @@ export class AgentRuntime {
   async run(): Promise<AgentRunResult> {
     const startedAt = new Date().toISOString();
     const startMs = Date.now();
+
+    // Ensure browser cleanup on all exit paths
+    const cleanupBrowser = async () => {
+      await BrowserSessionManager.getInstance().closeSession(this.runId).catch(() => {});
+    };
 
     try {
       // Main turn loop
@@ -292,12 +300,15 @@ export class AgentRuntime {
       // Cancelled via abort signal
       return this.buildResult(startedAt, startMs, 'cancelled', 'Cancelled');
     } catch (error) {
+      await cleanupBrowser();
       return this.buildResult(
         startedAt,
         startMs,
         'error',
         error instanceof Error ? error.message : String(error),
       );
+    } finally {
+      await cleanupBrowser();
     }
   }
 
