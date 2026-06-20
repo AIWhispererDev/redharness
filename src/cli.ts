@@ -476,8 +476,158 @@ program
   });
 
 // ===========================================================================
-// PRD 04: Agent Runtime commands
+// PRD 05: Agent scenario evaluation commands
 // ===========================================================================
+
+program
+  .command('agent-eval')
+  .argument('<pack>', 'pack id')
+  .argument('<dataset>', 'dataset id')
+  .option('--split <name>', 'dataset split to run')
+  .option('--scenario <id>', 'single scenario id')
+  .option('--trials <n>', 'override trial count', (v) => Number(v))
+  .option('--provider <mode>', 'agent provider mode: fake|replay|live', 'fake')
+  .option('--output-dir <dir>', 'output directory for results')
+  .option('--findings', 'write finding packets for failures', false)
+  .description('Evaluate agent scenarios from a dataset and produce graded results')
+  .action(async (packId, datasetId, options) => {
+    const packDir = defaultPackDir(packId);
+    const pack = await loadPackFromDir(packDir);
+    if (!pack.baseUrl) { console.error('Pack has no baseUrl'); process.exitCode = 1; return; }
+
+    const dsDir = path.resolve(packDir, 'datasets', datasetId);
+    const { loadScenariosFromDir, loadDatasetManifest, resolveScenarioAgent } = await import('./scenarios/loader.js');
+    const { runScenario } = await import('./scenarios/runner.js');
+    const { getSplitScenarios } = await import('./datasets/manifest.js');
+    const { graderRegistry } = await import('./graders/registry.js');
+
+    let scenarios = await loadScenariosFromDir(dsDir);
+    const manifest = await loadDatasetManifest(dsDir);
+
+    // Filter by split or explicit scenario
+    if (options.split && manifest) {
+      const splitIds = new Set(getSplitScenarios(manifest as any, options.split as any));
+      scenarios = scenarios.filter((s) => splitIds.has(s.id));
+    } else if (options.scenario) {
+      scenarios = scenarios.filter((s) => s.id === options.scenario);
+    }
+
+    // Filter to agent-kind scenarios only
+    scenarios = scenarios.filter((s) => s.actor.kind === 'agent');
+
+    if (scenarios.length === 0) {
+      console.error('No agent scenarios matched the selection');
+      process.exitCode = 1;
+      return;
+    }
+
+    const outputDir = options.outputDir ?? path.resolve(process.cwd(), 'runs', packId, `agent-eval-${datasetId}-${Date.now()}`);
+    await (await import('node:fs/promises')).mkdir(outputDir, { recursive: true });
+
+    for (const scenario of scenarios) {
+      const trialsOverride = options.trials;
+      const scenarioToRun = trialsOverride ? { ...scenario, trials: trialsOverride } : scenario;
+
+      // Set provider mode on the scenario
+      const enrichedScenario = {
+        ...scenarioToRun,
+        providerMode: options.provider as 'fake' | 'replay' | 'live' | undefined,
+      };
+
+      const graders = (enrichedScenario.graders ?? []).map((definition) => {
+        const config = definition.type === 'trajectory'
+          ? { constraint: enrichedScenario.trajectory ?? definition.config ?? {} }
+          : definition.config;
+        return graderRegistry.create(definition.type, config);
+      });
+
+      // Add agent-specific graders when in agent mode
+      const agentGraderTypes = ['agent-tool', 'agent-state'];
+      for (const gType of agentGraderTypes) {
+        if (graderRegistry.has(gType) && !enrichedScenario.graders?.some((g) => g.type === gType)) {
+          try {
+            graders.push(graderRegistry.create(gType));
+          } catch {
+            // If grader not registered, skip
+          }
+        }
+      }
+
+      const agentInfo = resolveScenarioAgent(enrichedScenario);
+      console.log(`Running agent scenario: ${enrichedScenario.title || enrichedScenario.id}`);
+      if (agentInfo) {
+        console.log(`  Agent: ${agentInfo.config.agentId}@${agentInfo.config.version} (hash: ${agentInfo.hash})`);
+      }
+      console.log(`  Trials: ${enrichedScenario.trials ?? 1}, Provider: ${options.provider}`);
+
+      const result = await runScenario(enrichedScenario, {
+        packDir,
+        baseUrl: pack.baseUrl,
+        headless: true,
+        outputDir,
+        graders,
+        dataset: manifest ? {
+          id: String((manifest as any).id ?? datasetId),
+          version: String((manifest as any).version ?? '1.0.0'),
+          contentHash: String((manifest as any).contentHash ?? ''),
+        } : undefined,
+      });
+
+      // Write result
+      await (await import('node:fs/promises')).writeFile(
+        path.join(outputDir, `${scenario.id}.json`),
+        JSON.stringify(result, null, 2),
+        'utf8',
+      );
+
+      // Print summary
+      console.log(`  Status: ${result.status}`);
+      console.log(`  Trials: ${result.trials.length}, duration: ${(result.durationMs / 1000).toFixed(1)}s`);
+      for (const trial of result.trials) {
+        console.log(`  Trial ${trial.trial}: ${trial.status} (${trial.durationMs}ms, ${trial.assertions.length} assertions, ${trial.grades.length} grades)`);
+        for (const grade of trial.grades) {
+          console.log(`    - ${grade.graderId}: ${grade.status} (${grade.explanation?.slice(0, 100) ?? ''})`);
+        }
+      }
+
+      // Write findings for failures if requested
+      if (options.findings && (result.status === 'failed' || result.status === 'error')) {
+        const { writeFindingPacketV2 } = await import('./findingPackets.js');
+        const { ArtifactStore } = await import('./artifacts/artifactStore.js');
+        const store = new ArtifactStore(outputDir);
+
+        for (const trial of result.trials.filter((t) => t.status !== 'passed')) {
+          await writeFindingPacketV2({
+            packId,
+            baseUrl: pack.baseUrl,
+            title: `[Agent] ${scenario.title} (trial ${trial.trial}): ${trial.status}`,
+            severity: trial.status === 'error' ? 'Major' : 'Minor',
+            category: 'agent-evaluation',
+            suiteId: 'agent-evaluation',
+            check: scenario.id,
+            expectedState: `Agent should complete scenario ${scenario.id} with passing status`,
+            actualState: `Trial ${trial.trial} status: ${trial.status}`,
+            steps: [
+              `Scenario: ${scenario.id}`,
+              `Agent: ${agentInfo?.config.agentId ?? 'unknown'}@${agentInfo?.config.version ?? '?'}`,
+              `Provider: ${options.provider}`,
+              ...trial.assertions.map((a) => `${a.name}: ${a.passed ? 'pass' : 'fail'} — ${a.message}`),
+              ...trial.grades.map((g) => `${g.graderId}: ${g.status} — ${g.explanation?.slice(0, 80)}`),
+            ],
+            store,
+            attemptId: `agent-eval-${scenario.id}-trial-${trial.trial}`,
+            traceId: `agent-eval-${Date.now()}`,
+          });
+        }
+      }
+
+      if (result.status === 'failed' || result.status === 'error') {
+        process.exitCode = 1;
+      }
+    }
+
+    console.log(`\nResults in: ${outputDir}`);
+  });
 
 program
   .command('agent')

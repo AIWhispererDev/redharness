@@ -525,5 +525,124 @@ export function registerAllSuites(): void {
         }
       },
     },
+
+    // ---- Agent evaluation suite ----
+    {
+      id: 'agent-evaluation',
+      title: 'Agent Evaluation',
+      description: 'Run agent scenarios as versioned dataset trials with trace-backed grades.',
+      tags: ['agent', 'release', 'evaluation'],
+      requirement: 'optional',
+      estimatedDuration: 'medium',
+      requires: ['baseUrl'],
+      async run(context: SuiteContext): Promise<SuiteResult> {
+        const startedAt = new Date().toISOString();
+        const startMs = Date.now();
+
+        try {
+          const { loadScenariosFromDir, loadDatasetManifest, resolveScenarioAgent } = await import('../scenarios/loader.js');
+          const { runScenario } = await import('../scenarios/runner.js');
+          const { graderRegistry } = await import('../graders/registry.js');
+          const { computeDatasetHash } = await import('../datasets/manifest.js');
+
+          const datasetDir = path.join(context.packDir, 'datasets', 'agent-eval');
+          let scenarios = await loadScenariosFromDir(datasetDir);
+          let manifest = await loadDatasetManifest(datasetDir);
+
+          // Fall back to 'core' dataset for agent scenarios
+          if (scenarios.length === 0) {
+            const coreDir = path.join(context.packDir, 'datasets', 'core');
+            scenarios = await loadScenariosFromDir(coreDir);
+            manifest = await loadDatasetManifest(coreDir);
+
+            // Filter to agent-kind scenarios only
+            scenarios = scenarios.filter((s) => s.actor.kind === 'agent');
+          }
+
+          if (scenarios.length === 0) {
+            return skippedResult('agent-evaluation', 'optional', 'No agent scenarios found in dataset');
+          }
+
+          const checks: Array<{ name: string; ok: boolean; details: string[] }> = [];
+          const artifacts: string[] = [];
+          let allOk = true;
+
+          for (const scenario of scenarios) {
+            const graders = (scenario.graders ?? []).map((def) => {
+              const config = def.type === 'trajectory'
+                ? { constraint: scenario.trajectory ?? def.config ?? {} }
+                : def.config;
+              return graderRegistry.create(def.type, config);
+            });
+
+            // Resolve agent config for tracking
+            const agentInfo = resolveScenarioAgent(scenario);
+
+            const result = await runScenario(scenario, {
+              packDir: context.packDir,
+              baseUrl: context.baseUrl ?? '',
+              storageState: context.storageState,
+              headless: context.headless ?? true,
+              outputDir: context.outputDir ? path.join(context.outputDir, 'agent-evaluation') : undefined,
+              graders,
+              dataset: manifest ? {
+                id: String((manifest as any).id ?? 'agent-eval'),
+                version: String((manifest as any).version ?? '1.0.0'),
+                contentHash: String((manifest as any).contentHash ?? ''),
+              } : undefined,
+            });
+
+            const passCount = result.trials.filter((t) => t.status === 'passed').length;
+            const totalTrials = result.trials.length;
+            const scenarioOk = result.status === 'passed';
+
+            const details = [
+              `Status: ${result.status}`,
+              `Trials: ${passCount}/${totalTrials} passed`,
+              `Duration: ${(result.durationMs / 1000).toFixed(1)}s`,
+              `Grades: ${result.graderVersions.map((g) => `${g.id}@${g.version}`).join(', ')}`,
+            ];
+
+            if (agentInfo) {
+              details.push(`Agent: ${agentInfo.config.agentId}@${agentInfo.config.version} (hash: ${agentInfo.hash})`);
+            }
+
+            checks.push({
+              name: scenario.id,
+              ok: scenarioOk,
+              details,
+            });
+
+            if (!scenarioOk) allOk = false;
+          }
+
+          const endedAt = new Date().toISOString();
+          return buildSuiteResult({
+            suiteId: 'agent-evaluation',
+            requirement: 'optional',
+            ok: allOk,
+            checks,
+            artifacts,
+            startedAt,
+            endedAt,
+            durationMs: Date.now() - startMs,
+          });
+        } catch (error) {
+          const endedAt = new Date().toISOString();
+          return {
+            suiteId: 'agent-evaluation',
+            status: 'error',
+            requirement: 'optional',
+            startedAt,
+            endedAt,
+            durationMs: Date.now() - startMs,
+            attempts: [],
+            checks: [],
+            artifacts: [],
+            error: serializeError(error),
+          };
+        }
+      },
+    },
   ]);
 }

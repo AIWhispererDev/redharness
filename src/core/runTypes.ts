@@ -11,6 +11,20 @@ export type RequirementPolicy = 'required' | 'optional' | 'informational';
 /** Prerequisite that a suite may declare. */
 export type SuiteRequirement = 'baseUrl' | 'storageState' | 'nonProStorageState' | 'repo';
 
+/** Agent evaluation suite configuration. */
+export type AgentEvalConfig = {
+  /** Dataset ID to evaluate. */
+  datasetId: string;
+  /** Dataset split to run (optional). */
+  split?: string;
+  /** Provider mode for agent scenarios. */
+  providerMode?: 'fake' | 'replay' | 'live';
+  /** Number of trials per scenario. */
+  trials?: number;
+  /** Whether to write finding packets for failures. */
+  writeFindings?: boolean;
+};
+
 /** Serialized error suitable for manifest output. */
 export type SerializedError = {
   message: string;

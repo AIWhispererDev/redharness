@@ -73,3 +73,11 @@ graderRegistry.register('composite', (config) => {
   }
   return new CompositeGrader(subGraders);
 });
+
+// Agent-tool-sequence grader — checks tool call sequence from agent trials
+import { AgentToolGrader } from './agentTool.js';
+graderRegistry.register('agent-tool', (config) => new AgentToolGrader(config as any));
+
+// Agent-state grader — checks agent trial after-state against assertions
+import { AgentStateGrader } from './agentState.js';
+graderRegistry.register('agent-state', (config) => new AgentStateGrader(config as any));
