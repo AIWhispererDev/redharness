@@ -442,7 +442,7 @@ Security/pentest findings can generate HackZero-style draft packets:
 findings/<slug>/
   finding.md          # Notion-ready draft
   finding.json        # structured data
-  replay.pw.ts        # Playwright replay scaffold
+  replay.pw.ts        # Playwright replay spec (executable via confirmation runner)
   exact-request.http  # exact HTTP request, when captured
   replay.curl.sh      # curl replay, when captured
 ```
@@ -633,7 +633,7 @@ The [remaining implementation plan](docs/prd/agentic-harness-remaining-implement
 ### Still missing / next high-value work
 
 1. Screen recording per finding (`video.webm`).
-2. Real replay execution in `replay.pw.ts` instead of scaffold.
+2. AI red-team mode for prompt-injection/system-prompt/data-leak probes.
 3. Exact request capture for browser/API flows beyond simple GET routes.
 4. AI red-team mode for prompt-injection/system-prompt/data-leak probes.
 5. True whitebox mode against the actual target app source repo.

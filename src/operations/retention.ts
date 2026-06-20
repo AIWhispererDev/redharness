@@ -57,6 +57,12 @@ export type RetentionOptions = {
   policy?: Partial<RetentionPolicy>;
   /** Whether to use recursive pack/run discovery. */
   recursive?: boolean;
+  /**
+   * Whether to apply per-category video retention within retained runs.
+   * When true, video files older than policy.videoDays are deleted from
+   * runs that are themselves retained. Default: true.
+   */
+  applyVideoRetention?: boolean;
 };
 
 /**
@@ -69,8 +75,13 @@ export type RetentionOptions = {
  *
  * Protected baselines, named release runs, and the most recent run per pack
  * are never deleted.
+ *
+ * When applyVideoRetention is enabled, video files within retained runs
+ * are cleaned up according to the videoDays policy separately from the
+ * run retention policy.
  */
 export async function applyRetention(options: RetentionOptions): Promise<RetentionResult> {
+  const policy: RetentionPolicy = { ...DEFAULT_RETENTION_POLICY, ...options.policy };
   const root = path.resolve(options.root);
   const now = options.now?.getTime() ?? Date.now();
   const olderThanDays = options.olderThanDays;
@@ -103,6 +114,7 @@ export async function applyRetention(options: RetentionOptions): Promise<Retenti
     youngestPerPack.add(packRuns[0].path);
   }
 
+  // First pass: delete old runs entirely
   for (const runDir of runDirs) {
     assertContained(root, runDir.path);
 
@@ -125,6 +137,24 @@ export async function applyRetention(options: RetentionOptions): Promise<Retenti
       assertContained(root, runDir.path);
       await rm(runDir.path, { recursive: true, force: true });
       deleted.push(runDir.path);
+    }
+  }
+
+  // Second pass: apply video retention within retained runs
+  const applyVideo = options.applyVideoRetention ?? true;
+  if (applyVideo) {
+    for (const runDir of runDirs) {
+      // Skip runs that were or will be deleted entirely
+      if (deleted.includes(runDir.path)) continue;
+      if (runDir.ageDays < olderThanDays) continue;
+
+      // Determine video retention threshold
+      const videoDays = policy.videoDays;
+      if (videoDays <= 0) continue;
+
+      const videoDir = path.join(runDir.path, 'videos');
+      const deletedVideos = await deleteOldFiles(videoDir, videoDays, now, root);
+      deleted.push(...deletedVideos);
     }
   }
 
@@ -214,4 +244,57 @@ function assertContained(root: string, candidate: string): void {
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
     throw new Error(`Retention path is outside the approved root: ${candidate}`);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Per-category file cleanup within retained directories
+// ---------------------------------------------------------------------------
+
+/**
+ * Delete files in a directory that are older than the specified age threshold.
+ * Returns the paths of deleted files.
+ */
+async function deleteOldFiles(
+  dirPath: string,
+  olderThanDays: number,
+  now: number,
+  root: string,
+): Promise<string[]> {
+  const deleted: string[] = [];
+  let entries: string[];
+
+  try {
+    entries = await readdir(dirPath);
+  } catch {
+    // Directory doesn't exist — nothing to clean up
+    return [];
+  }
+
+  for (const entry of entries) {
+    const entryPath = path.join(dirPath, entry);
+    try {
+      const info = await stat(entryPath);
+      assertContained(root, entryPath);
+
+      if (info.isDirectory()) {
+        // Recurse into subdirectories
+        const subDeleted = await deleteOldFiles(entryPath, olderThanDays, now, root);
+        deleted.push(...subDeleted);
+
+        // Remove empty directories
+        const remaining = await readdir(entryPath);
+        if (remaining.length === 0) {
+          await rm(entryPath, { recursive: true, force: true });
+          deleted.push(entryPath);
+        }
+      } else if (info.isFile() && (now - info.mtimeMs) / 86_400_000 >= olderThanDays) {
+        await rm(entryPath, { force: true });
+        deleted.push(entryPath);
+      }
+    } catch {
+      // Best effort for individual files
+    }
+  }
+
+  return deleted;
 }
