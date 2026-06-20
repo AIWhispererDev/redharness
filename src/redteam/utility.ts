@@ -6,6 +6,53 @@
  */
 
 import type { HarmEndpoint } from './redteamTypes.js';
+import type { AgentRunResult } from '../agent/agentTypes.js';
+
+/**
+ * Compute utility metrics from an agent run result.
+ * Measures efficiency, completeness, and overall utility.
+ */
+export type UtilityReport = {
+  efficiency: number;
+  completeness: number;
+  utility: number;
+  toolDiversity: number;
+};
+
+/**
+ * Compute utility from an agent run result.
+ */
+export function computeUtility(
+  result: AgentRunResult,
+  options?: {
+    expectedSteps?: number;
+    maxSteps?: number;
+    expectedTools?: string[];
+  },
+): UtilityReport {
+  const expectedSteps = options?.expectedSteps ?? 5;
+  const maxSteps = options?.maxSteps ?? 10;
+  const expectedTools = options?.expectedTools ?? [];
+
+  // Efficiency: how close to ideal turn count
+  const turnsUsed = result.turn || 1;
+  const efficiency = Math.max(0, 1 - Math.abs(turnsUsed - expectedSteps) / maxSteps);
+
+  // Completeness: how many expected tools were used
+  const usedToolNames = result.observations.map((o) => o.sourceTool).filter(Boolean);
+  const uniqueTools = new Set(usedToolNames);
+  const completeness = expectedTools.length > 0
+    ? expectedTools.filter((t) => uniqueTools.has(t)).length / expectedTools.length
+    : 1;
+
+  // Tool diversity
+  const toolDiversity = uniqueTools.size / Math.max(1, expectedTools.length);
+
+  // Composite utility
+  const utility = (efficiency * 0.4 + completeness * 0.4 + toolDiversity * 0.2);
+
+  return { efficiency, completeness, utility, toolDiversity };
+}
 
 export type UtilityBenchmark = {
   /** Unique benchmark ID. */

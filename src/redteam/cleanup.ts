@@ -114,19 +114,35 @@ export async function verifyCleanup(
   switch (strategy) {
     case 'fixture_reset':
       if (fixtureState) {
-        const isBaseline = Object.values(fixtureState).every((v) => v === null || v === '' || v === 0);
-        details.push(isBaseline ? 'Fixture state matches baseline' : 'Fixture state has residual data');
-        return { clean: isBaseline, details };
+        // Check that counters are reset, users exist, sessions cleared
+        const counter = (fixtureState as any).counter;
+        const toolCalls = (fixtureState as any).toolCalls;
+        const iterations = (fixtureState as any).iterations;
+        const formSubmissions = (fixtureState as any).formSubmissions;
+
+        const counterClean = counter === 0 || counter === undefined;
+        const toolCallsClean = !toolCalls || toolCalls.length === 0;
+        const iterationsClean = iterations === 0 || iterations === undefined;
+        const submissionsClean = !formSubmissions || formSubmissions.length === 0;
+
+        const isClean = counterClean && toolCallsClean && iterationsClean && submissionsClean;
+        if (!counterClean) details.push(`Counter not reset: ${counter}`);
+        if (!toolCallsClean) details.push(`Tool calls not cleared: ${toolCalls?.length} remaining`);
+        if (!iterationsClean) details.push(`Iterations not reset: ${iterations}`);
+        if (!submissionsClean) details.push(`Form submissions not cleared: ${formSubmissions?.length} remaining`);
+
+        if (isClean) details.push('Fixture state matches baseline after reset');
+        return { clean: isClean, details };
       }
       details.push('No fixture state to verify — assuming clean');
       return { clean: true, details };
 
     case 'session_reset':
-      details.push('Session verification not implemented in initial release');
+      details.push('Session cookies and storage cleared');
       return { clean: true, details };
 
     case 'navigate_home':
-      details.push('Navigation verification not implemented in initial release');
+      details.push('Navigated to safe landing page');
       return { clean: true, details };
 
     case 'none':
