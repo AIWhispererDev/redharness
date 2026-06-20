@@ -26,6 +26,10 @@ import { RepeatedActionDetector, LoopDetector, StallDetector, type StopCondition
 import { BrowserSessionManager } from './browser/sessionManager.js';
 import type { ExecutionStatus } from '../core/status.js';
 import type { BudgetConsumption } from './agentTypes.js';
+import { AgentTraceHelper } from './runtimeTrace.js';
+import { AgentEvidenceBuilder } from './agentEvidence.js';
+import type { ArtifactStore } from '../artifacts/artifactStore.js';
+import type { TraceWriter } from '../trace/traceWriter.js';
 
 export type RuntimeOptions = {
   agent: AgentDefinition;
@@ -40,6 +44,14 @@ export type RuntimeOptions = {
   isCiEnvironment?: boolean;
   /** Controlled fixture origin passed to fixture-only tools. */
   fixtureBaseUrl?: string;
+  /** Trace writer for evidence persistence (injected by coordinator). */
+  traceWriter?: TraceWriter;
+  /** Artifact store for evidence persistence. */
+  artifactStore?: ArtifactStore;
+  /** Parent span ID for trace correlation. */
+  parentSpanId?: string;
+  /** Attempt ID for trace correlation. */
+  attemptId?: string;
 };
 
 export type RunTurnResult = {
@@ -71,6 +83,9 @@ export class AgentRuntime {
   private isCi: boolean;
   private runId: string;
   private fixtureBaseUrl?: string;
+  private traceHelper: AgentTraceHelper;
+  private evidenceBuilder: AgentEvidenceBuilder;
+  private artifactStore?: ArtifactStore;
 
   constructor(options: RuntimeOptions) {
     this.agent = options.agent;
@@ -109,6 +124,24 @@ export class AgentRuntime {
     this.loopDetector = new LoopDetector();
     this.stallDetector = new StallDetector();
     this.abortController = new AbortController();
+
+    // Initialize trace helper and evidence builder
+    const attemptId = options.attemptId ?? `agent-${this.runId}`;
+    this.traceHelper = new AgentTraceHelper({
+      traceWriter: (options.traceWriter ?? this.createNullTraceWriter()) as import('../trace/traceWriter.js').TraceWriter,
+      runId: this.runId,
+      attemptId,
+      agentId: this.agent.id,
+      scenarioId: options.scenarioId,
+      trialId: options.trialId,
+    });
+    this.evidenceBuilder = new AgentEvidenceBuilder({
+      runId: this.runId,
+      attemptId,
+      traceId: this.traceHelper.getTraceId(),
+      agentId: this.agent.id,
+    });
+    this.artifactStore = options.artifactStore;
 
     this.state = {
       runId: this.runId,
@@ -320,16 +353,28 @@ export class AgentRuntime {
       throw new Error('Checkpoint manager not configured — cannot resume');
     }
 
+    const loadSpanId = this.traceHelper.startCheckpointLoad(checkpointId);
+
     const checkpoint = await this.checkpoints.load(checkpointId);
     if (!checkpoint) {
+      this.traceHelper.endCheckpointLoad(loadSpanId, 'error', `Checkpoint not found: ${checkpointId}`);
       throw new Error(`Checkpoint not found: ${checkpointId}`);
     }
 
     // Validate version compatibility
     const versionCheck = this.checkpoints.validateVersions(checkpoint);
     if (!versionCheck.valid) {
+      this.traceHelper.endCheckpointLoad(loadSpanId, 'error', `Version mismatch: ${versionCheck.issues.join('; ')}`);
       throw new Error(`Checkpoint version mismatch: ${versionCheck.issues.join('; ')}`);
     }
+
+    // Record trace cursor for parentage
+    this.traceHelper.getTraceWriter().addEvent(loadSpanId, 'checkpoint.restore', {
+      checkpointId,
+      previousTurn: checkpoint.agentState.turn,
+    });
+
+    this.traceHelper.endCheckpointLoad(loadSpanId, 'ok');
 
     // Restore state
     this.state = checkpoint.agentState;
@@ -396,7 +441,17 @@ export class AgentRuntime {
       model: this.agent.model,
     };
 
-    const response = await this.model.generate(request, this.abortController.signal);
+    // Start model generation span
+    const modelSpanId = this.traceHelper.startModelGenerate(request);
+    this.evidenceBuilder.addModelGenerateSpanId(modelSpanId);
+
+    let response: ModelResponse;
+    try {
+      response = await this.model.generate(request, this.abortController.signal);
+    } catch (error) {
+      this.traceHelper.endModelGenerateError(modelSpanId, error instanceof Error ? error : new Error(String(error)));
+      throw error;
+    }
 
     // Track token usage
     if (response.usage) {
@@ -406,6 +461,90 @@ export class AgentRuntime {
       }
     }
 
+    // End model generation span with usage and finish reason
+    this.traceHelper.endModelGenerate(modelSpanId, response);
+
     return response;
+  }
+
+  /** Create a null trace writer for safe fallback when none is injected. */
+  private createNullTraceWriter(): {
+    getTraceId(): string;
+    getSpans(): Array<Record<string, unknown>>;
+    startSpan(p: { name: string; kind: string; parentSpanId?: string; attemptId?: string; attributes?: Record<string, unknown> }): string;
+    endSpan(spanId: string, status?: string, attributes?: Record<string, unknown>): void;
+    addEvent(spanId: string, name: string, attributes?: Record<string, unknown>): void;
+    setAttribute(spanId: string, key: string, value: unknown): void;
+    flush(): Promise<void>;
+    getRedactionSummary(): Array<{ fieldPath: string; ruleId: string }>;
+    buildCorrelation(overrides: Record<string, string>): { runId: string; attemptId: string; traceId: string };
+  } {
+    const traceId = `null-${this.runId}`;
+    const spans: Array<Record<string, unknown>> = [];
+    const redactions: Array<{ fieldPath: string; ruleId: string }> = [];
+
+    return {
+      getTraceId: () => traceId,
+      getSpans: () => [...spans],
+      getRedactionSummary: () => [...redactions],
+      startSpan: (p) => {
+        const spanId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        spans.push({
+          traceId, spanId,
+          parentSpanId: p.parentSpanId,
+          attemptId: p.attemptId,
+          name: p.name,
+          kind: p.kind,
+          startedAt: new Date().toISOString(),
+          status: 'ok',
+          attributes: p.attributes ?? {},
+          events: [],
+        });
+        return spanId;
+      },
+      endSpan: (spanId, status, attributes) => {
+        const s = spans.find((sp) => sp.spanId === spanId);
+        if (!s) return;
+        s.endedAt = new Date().toISOString();
+        if (status) s.status = status;
+        if (attributes) Object.assign(s.attributes as Record<string, unknown>, attributes);
+      },
+      addEvent: (spanId, name, attributes) => {
+        const s = spans.find((sp) => sp.spanId === spanId);
+        if (!s) return;
+        (s.events as Array<unknown>).push({ name, timestamp: new Date().toISOString(), attributes: attributes ?? {} });
+      },
+      setAttribute: (spanId, key, value) => {
+        const s = spans.find((sp) => sp.spanId === spanId);
+        if (!s) return;
+        (s.attributes as Record<string, unknown>)[key] = value;
+      },
+      flush: async () => {},
+      buildCorrelation: (overrides) => ({ runId: '', attemptId: '0', traceId, ...overrides }),
+    };
+  }
+
+  /** Flush trace spans and persist evidence manifest. */
+  private async flushEvidence(): Promise<void> {
+    try {
+      await this.traceHelper.flush();
+      if (this.artifactStore) {
+        const evidence = this.evidenceBuilder.build();
+        const manifestRef = await this.artifactStore.writeJson(
+          'agent-evidence-manifest',
+          evidence,
+          `agent-evidence-${this.runId}.json`,
+          { subDir: 'evidence' },
+        );
+        this.evidenceBuilder.addArtifact(manifestRef);
+        await this.artifactStore.saveManifest(
+          this.evidenceBuilder.build().attemptId,
+          this.traceHelper.getTraceId(),
+        );
+      }
+      await this.traceHelper.flush();
+    } catch {
+      // Best-effort flush — never throw from cleanup
+    }
   }
 }

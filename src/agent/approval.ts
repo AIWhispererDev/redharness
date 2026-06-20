@@ -17,6 +17,7 @@ import type {
 } from './agentTypes.js';
 import type { ToolRegistry } from './toolRegistry.js';
 import { validateActionAgainstIntent } from './intent.js';
+import type { JsonValue } from '../trace/traceTypes.js';
 
 export type ApprovalDecision = {
   allowed: boolean;
