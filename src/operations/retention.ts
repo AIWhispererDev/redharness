@@ -65,6 +65,12 @@ export type RetentionOptions = {
    * runs that are themselves retained. Default: true.
    */
   applyVideoRetention?: boolean;
+  /**
+   * Catalog path for discovering protected baselines and canonical findings.
+   * When provided, the retention job queries the catalog for named baselines
+   * and their linked findings, then protects those from deletion.
+   */
+  catalogBaseDir?: string;
 };
 
 /**
@@ -81,14 +87,39 @@ export type RetentionOptions = {
  * When applyVideoRetention is enabled, video files within retained runs
  * are cleaned up according to the videoDays policy separately from the
  * run retention policy.
+ *
+ * When catalogBaseDir is provided, protected baselines and their linked
+ * canonical findings are discovered from the catalog automatically.
  */
 export async function applyRetention(options: RetentionOptions): Promise<RetentionResult> {
   const policy: RetentionPolicy = { ...DEFAULT_RETENTION_POLICY, ...options.policy };
   const root = path.resolve(options.root);
   const now = options.now?.getTime() ?? Date.now();
   const olderThanDays = options.olderThanDays;
-  const protectedBaselines = new Set(options.protectedBaselines ?? []);
-  const protectedFindingIds = new Set(options.protectedFindingIds ?? []);
+
+  // Discover protected records from catalog when possible
+  let protectedBaselines = new Set(options.protectedBaselines ?? []);
+  let protectedFindingIds = new Set(options.protectedFindingIds ?? []);
+
+  if (options.catalogBaseDir && !options.protectedBaselines && !options.protectedFindingIds) {
+    try {
+      const { RunCatalog } = await import('../store/catalog.js');
+      const catalog = new RunCatalog(options.catalogBaseDir);
+      const baselines = await catalog.listBaselines();
+      for (const bl of baselines) {
+        protectedBaselines.add(bl.name);
+        protectedBaselines.add(bl.runId);
+        // Discover findings linked to this baseline's run
+        const findings = await catalog.queryFindings({ runId: bl.runId, limit: 1000 });
+        for (const f of findings) {
+          if (f.findingId) protectedFindingIds.add(f.findingId);
+        }
+      }
+    } catch {
+      // Catalog unavailable — continue with explicitly provided protections
+    }
+  }
+
   const candidates: RetentionCandidate[] = [];
   const deleted: string[] = [];
 

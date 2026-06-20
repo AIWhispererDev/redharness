@@ -34,6 +34,16 @@
 import path from 'node:path';
 import { HarnessService } from '../service/harnessService.js';
 import { registerAllSuites } from '../suites/registerSuites.js';
+import {
+  DEFAULT_OPERATIONAL_POLICY,
+  checkMcpToolPolicy,
+  checkSelectionPolicy,
+  checkNetworkTargetPolicy,
+  checkOutputRootPolicy,
+  operationalPolicySchema,
+  type OperationalPolicy,
+  type McpAllowlist,
+} from '../operations/operationalPolicy.js';
 
 export type McpServerConfig = {
   /** Whether to allow startRun and cancelRun operations. */
@@ -44,6 +54,8 @@ export type McpServerConfig = {
   packsDir?: string;
   /** Runs base directory. Defaults to ./runs. */
   runsBaseDir?: string;
+  /** Operational policy (overrides legacy boolean flags). */
+  policy?: OperationalPolicy;
 };
 
 export type McpToolRequest = {
@@ -66,18 +78,31 @@ export type McpToolResponse = {
  */
 export class McpServer {
   private service: HarnessService;
-  private config: McpServerConfig;
+  private config: McpServerConfig & { policy?: OperationalPolicy };
 
   constructor(config: McpServerConfig = {}) {
     registerAllSuites();
     const runsBaseDir = path.resolve(
       config.runsBaseDir ?? path.resolve(process.cwd(), 'runs'),
     );
+
+    // Resolve operational policy
+    let policy: OperationalPolicy;
+    if (config.policy) {
+      policy = operationalPolicySchema.parse(config.policy) as OperationalPolicy;
+    } else {
+      policy = {
+        ...DEFAULT_OPERATIONAL_POLICY,
+        allowMcpRunOperations: config.allowRunOperations ?? false,
+      };
+    }
+
     this.config = {
-      allowRunOperations: false, // Fail-closed
+      allowRunOperations: policy.allowMcpRunOperations,
       approvedRunRoots: [runsBaseDir],
       ...config,
       runsBaseDir,
+      policy,
     };
     this.service = new HarnessService({
       packsDir: config.packsDir,
@@ -458,11 +483,31 @@ export class McpServer {
       };
     }
 
+    // Validate identifiers before policy checks
+    const packId = this.safeIdentifier(params.pack, 'pack');
+    const profile = params.profile ? String(params.profile) : undefined;
+    const suites = params.suites ? (params.suites as string[]) : [];
+    const tags = params.tags ? (params.tags as string[]) : [];
+
+    // Check operational policy (tool-level)
+    const policy = this.config.policy;
+    const toolPolicy = checkMcpToolPolicy('qa_start_run', params, policy ?? DEFAULT_OPERATIONAL_POLICY);
+    if (!toolPolicy.allowed) {
+      return { content: [{ type: 'text', text: toolPolicy.reason ?? 'Operation denied by policy' }], isError: true };
+    }
+
+    // Check selection policy (allowlist for packs/profiles/suites/tags)
+    const mcpAllowlist = policy?.mcp;
+    const selectionPolicy = checkSelectionPolicy(packId, profile, suites, tags, mcpAllowlist);
+    if (!selectionPolicy.allowed) {
+      return { content: [{ type: 'text', text: selectionPolicy.reason ?? 'Selection denied by allowlist' }], isError: true };
+    }
+
     const result = await this.service.startRunDetached({
-      packId: this.safeIdentifier(params.pack, 'pack'),
-      profile: params.profile ? String(params.profile) : undefined,
-      suites: params.suites ? (params.suites as string[]) : undefined,
-      tags: params.tags ? (params.tags as string[]) : undefined,
+      packId,
+      profile,
+      suites: suites.length > 0 ? suites : undefined,
+      tags: tags.length > 0 ? tags : undefined,
       excludedTags: params.excludedTags ? (params.excludedTags as string[]) : undefined,
       headless: params.headless !== false,
       workers: params.workers ? Number(params.workers) : undefined,
@@ -682,6 +727,13 @@ export class McpServer {
       };
     }
 
+    // Check operational policy for approval operations
+    const policy = this.config.policy;
+    const toolPolicy = checkMcpToolPolicy('qa_approve_agent_tool', params, policy ?? DEFAULT_OPERATIONAL_POLICY);
+    if (!toolPolicy.allowed) {
+      return { content: [{ type: 'text', text: toolPolicy.reason ?? 'Approval operations disabled by policy' }], isError: true };
+    }
+
     try {
       const approvalId = this.safeIdentifier(params.approvalId, 'approvalId');
       const runId = this.safeIdentifier(params.runId, 'runId');
@@ -707,6 +759,13 @@ export class McpServer {
         content: [{ type: 'text', text: 'Run operations are disabled on this server. Set allowRunOperations: true to enable.' }],
         isError: true,
       };
+    }
+
+    // Check operational policy for approval operations
+    const policy = this.config.policy;
+    const toolPolicy = checkMcpToolPolicy('qa_deny_agent_tool', params, policy ?? DEFAULT_OPERATIONAL_POLICY);
+    if (!toolPolicy.allowed) {
+      return { content: [{ type: 'text', text: toolPolicy.reason ?? 'Approval operations disabled by policy' }], isError: true };
     }
 
     try {

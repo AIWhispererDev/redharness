@@ -11,6 +11,7 @@
 
 import type { TraceSpan } from '../trace/traceTypes.js';
 import { createHash } from 'node:crypto';
+import { redactOtelAttributes } from '../operations/operationalPolicy.js';
 
 export type OtelExportOptions = {
   /** OTLP endpoint URL (e.g. http://localhost:4318/v1/traces). */
@@ -23,6 +24,10 @@ export type OtelExportOptions = {
   failSilently?: boolean;
   /** Additional OTLP headers, for example collector authentication. */
   headers?: Record<string, string>;
+  /** Export timeout in milliseconds (default 5000). */
+  timeoutMs?: number;
+  /** Attribute keys whose values should be redacted before export. */
+  redactedKeys?: string[];
 };
 
 export type OtelExportResult = {
@@ -145,10 +150,20 @@ export async function exportSpans(
   options?: OtelExportOptions,
 ): Promise<OtelExportResult> {
   const errors: string[] = [];
+  const timeoutMs = options?.timeoutMs ?? 5000;
+  const redactedKeys = options?.redactedKeys ?? [];
+
+  // Apply redaction before any export
+  const redactedSpans = redactedKeys.length > 0
+    ? spans.map((span) => ({
+        ...span,
+        attributes: redactOtelAttributes(span.attributes as Record<string, unknown>, redactedKeys) as Record<string, string | number | boolean>,
+      }))
+    : spans;
 
   if (!options?.endpoint) {
     // Write to console as JSONL for development
-    for (const span of spans) {
+    for (const span of redactedSpans) {
       const mapped = mapSpanToOtelAttributes(span);
       console.log(`[OTel] ${JSON.stringify(mapped)}`);
     }
@@ -168,24 +183,32 @@ export async function exportSpans(
       },
       scopeSpans: [{
         scope: { name: 'qa-harness', version: options.exporterVersion ?? '1' },
-        spans: spans.map(toOtlpSpan),
+        spans: redactedSpans.map(toOtlpSpan),
       }],
     }],
   };
 
   try {
-    const response = await fetch(options.endpoint, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        ...options.headers,
-      },
-      body: JSON.stringify(payload),
-    });
-    if (!response.ok) {
-      throw new Error(`OTLP collector returned ${response.status}: ${await response.text()}`);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const response = await fetch(options.endpoint, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          ...options.headers,
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        throw new Error(`OTLP collector returned ${response.status}: ${await response.text()}`);
+      }
+      return { exported: spans.length, failed: 0, errors: [] };
+    } finally {
+      clearTimeout(timeout);
     }
-    return { exported: spans.length, failed: 0, errors: [] };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     errors.push(message);
