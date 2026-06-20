@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { mkdir } from 'node:fs/promises';
 import type { Page, BrowserContext } from 'playwright';
 import type { TraceWriter } from './traceWriter.js';
 import type { ArtifactStore } from '../artifacts/artifactStore.js';
@@ -200,6 +201,7 @@ export class BrowserInstrumentation {
         try {
           const traceDir = path.resolve(this.runDir, 'browser-evidence');
           const tracePath = path.join(traceDir, 'trace.zip');
+          await mkdir(traceDir, { recursive: true });
           await ctx.tracing.stop({ path: tracePath });
           await this.artifactStore.copy(tracePath, 'playwright-trace', 'trace.zip', {
             traceId: this.traceWriter.getTraceId(),
