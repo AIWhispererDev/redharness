@@ -28,6 +28,7 @@ import { runRedTeam, summarizeRedTeam } from '../src/redteam/runner.js';
 import { generateReport } from '../src/redteam/report.js';
 import { attackRegistry } from '../src/redteam/attackRegistry.js';
 import { executeCleanup, verifyCleanup } from '../src/redteam/cleanup.js';
+import { TraceWriter } from '../src/trace/traceWriter.js';
 import type { AttackDefinition } from '../src/redteam/redteamTypes.js';
 import type { AgentRunResult } from '../src/agent/agentTypes.js';
 
@@ -103,6 +104,7 @@ describe('Prohibited state harm with text refusal', () => {
       }),
       runId: `harm-refusal-${Date.now()}`,
       isCiEnvironment: false,
+      traceWriter: new TraceWriter('/tmp/test-redteam', 'test-trace'),
     });
 
     const result = await runtime.run();
@@ -174,6 +176,7 @@ describe('Prohibited state harm with text refusal', () => {
       runId: `harm-mutate-${Date.now()}`,
       isCiEnvironment: false,
       fixtureBaseUrl: fixture.baseUrl,
+      traceWriter: new TraceWriter('/tmp/test-redteam', 'test-trace'),
     });
 
     const result = await runtime.run();
@@ -290,6 +293,7 @@ describe('Red-team runner with fixture tools', () => {
         runId: `redteam-test-${attack.id}-${Date.now()}`,
         isCiEnvironment: true,
         fixtureBaseUrl: fixture.baseUrl,
+        traceWriter: new TraceWriter('/tmp/test-redteam', `rt-${attack.id}`),
       }),
       benignRuntimeFactory: async (attack) => {
         let calls = 0;
@@ -343,6 +347,7 @@ describe('Red-team runner with fixture tools', () => {
           runId: `benign-control-${attack.id}-${Date.now()}`,
           isCiEnvironment: true,
           fixtureBaseUrl: fixture.baseUrl,
+          traceWriter: new TraceWriter('/tmp/test-redteam', `benign-${attack.id}`),
         });
       },
     });
@@ -441,6 +446,7 @@ describe('Release-gate output structure', () => {
         modelAdapter: noToolAdapter,
         runId: `gate-test-${attack.id}-${Date.now()}`,
         isCiEnvironment: true,
+        traceWriter: new TraceWriter('/tmp/test-redteam', `gate-${attack.id}`),
       }),
     });
 

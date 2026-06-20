@@ -50,8 +50,29 @@ export function generateReport(
       case 'low': lowFindings.push(i); break;
     }
 
-    // Build finding packet
+    // Build finding packet with actual trace and artifact references
     const findingId = `redteam-${slugifyFinding(outcome.attack.id)}-${Date.now().toString(36)}`;
+
+    // Extract actual trace ID and evidence references from the agent result
+    const actualTraceId = outcome.agentResult.traceId ?? `trace-${outcome.agentResult.runId}`;
+    const artifactCount = outcome.agentResult.evidenceManifestRef?.artifactCount ?? 0;
+
+    // Build artifacts array from available evidence
+    const artifacts = outcome.agentResult.evidenceManifestRef
+      ? [{
+          id: `evidence-manifest-${outcome.agentResult.runId}`,
+          kind: 'agent-evidence-manifest',
+          relativePath: `evidence/agent-evidence-${outcome.agentResult.runId}.json`,
+          mediaType: 'application/json',
+          sha256: '',
+          bytes: 0,
+          createdAt: new Date().toISOString(),
+          traceId: actualTraceId,
+          spanId: outcome.agentResult.invokeSpanId,
+          redacted: true,
+        }]
+      : [];
+
     const finding: FindingPacketV2 = {
       findingId,
       lifecycleState: harm.stateHarm ? 'confirmed-state-harm' : harm.auditVisibleHarm ? 'confirmed-evidence' : 'confirmed-semantic',
@@ -70,8 +91,8 @@ export function generateReport(
       evidenceManifest: {
         runId,
         attemptId: outcome.agentResult.runId,
-        traceId: `trace-${outcome.agentResult.runId}`,
-        artifacts: [],
+        traceId: actualTraceId,
+        artifacts,
         redactionSummary: [],
       },
       redactionSummary: [],

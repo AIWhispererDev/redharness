@@ -52,10 +52,60 @@ export function mapSpanToOtelAttributes(span: TraceSpan): Record<string, string 
     attrs['parent.span.id'] = span.parentSpanId;
   }
 
-  // Copy relevant custom attributes
+  // Agent-invoke specific attributes
+  if (span.kind === 'agent.invoke') {
+    const agentId = span.attributes['agentId'];
+    if (typeof agentId === 'string') {
+      attrs['gen_ai.agent.id'] = agentId;
+    }
+  }
+
+  // Model generation attributes
+  if (span.kind === 'model.generate') {
+    const model = span.attributes['model'];
+    const finishReason = span.attributes['finishReason'];
+    const inputTokens = span.attributes['inputTokens'];
+    const outputTokens = span.attributes['outputTokens'];
+    if (typeof model === 'string') attrs['gen_ai.request.model'] = model;
+    if (typeof finishReason === 'string') attrs['gen_ai.response.finish_reason'] = finishReason;
+    if (typeof inputTokens === 'number') attrs['gen_ai.response.input_tokens'] = inputTokens;
+    if (typeof outputTokens === 'number') attrs['gen_ai.response.output_tokens'] = outputTokens;
+  }
+
+  // Tool execution attributes
+  if (span.kind === 'tool.execute') {
+    const toolName = span.attributes['toolName'];
+    const success = span.attributes['success'];
+    const durationMs = span.attributes['durationMs'];
+    if (typeof toolName === 'string') attrs['gen_ai.tool.name'] = toolName;
+    if (typeof success === 'boolean') attrs['gen_ai.tool.success'] = success;
+    if (typeof durationMs === 'number') attrs['gen_ai.tool.duration_ms'] = durationMs;
+  }
+
+  // Policy check attributes
+  if (span.kind === 'policy.check') {
+    const allowed = span.attributes['allowed'];
+    const policy = span.attributes['policy'];
+    if (typeof allowed === 'boolean') attrs['gen_ai.policy.allowed'] = allowed;
+    if (typeof policy === 'string') attrs['gen_ai.policy.policy'] = policy;
+  }
+
+  // Grader score attributes
+  if (span.kind === 'grader.score') {
+    const score = span.attributes['score'];
+    const passed = span.attributes['passed'];
+    if (typeof score === 'number') attrs['gen_ai.grade.score'] = score;
+    if (typeof passed === 'boolean') attrs['gen_ai.grade.passed'] = passed;
+  }
+
+  // Copy remaining custom attributes that aren't already mapped
   for (const [key, value] of Object.entries(span.attributes)) {
     if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-      attrs[`gen_ai.${key}`] = value;
+      const attrKey = `gen_ai.${key}`;
+      // Don't overwrite already-set convention attributes
+      if (!(attrKey in attrs)) {
+        attrs[attrKey] = value;
+      }
     }
   }
 
@@ -79,6 +129,10 @@ function mapKindToOperation(kind: string): string {
     'grader.score': 'grade',
     'artifact.write': 'write_artifact',
     'policy.check': 'check_policy',
+    'policy.approval': 'approval_event',
+    'checkpoint.save': 'checkpoint_save',
+    'checkpoint.load': 'checkpoint_load',
+    'agent.cleanup': 'cleanup',
   };
   return operationMap[kind] ?? kind;
 }

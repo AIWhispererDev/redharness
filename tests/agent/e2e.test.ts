@@ -28,6 +28,7 @@ import { createFixtureAgentApp, resetAgentState } from '../fixtures/agent-app/in
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { TraceWriter } from '../../src/trace/traceWriter.js';
 import { rm } from 'node:fs/promises';
 
 // ---------------------------------------------------------------------------
