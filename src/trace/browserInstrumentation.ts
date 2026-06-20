@@ -1,3 +1,4 @@
+import path from 'node:path';
 import type { Page, BrowserContext } from 'playwright';
 import type { TraceWriter } from './traceWriter.js';
 import type { ArtifactStore } from '../artifacts/artifactStore.js';
@@ -43,7 +44,7 @@ export class BrowserInstrumentation {
     this.options = { ...DEFAULT_OPTIONS, ...options };
   }
 
-  /** Attach event handlers to a Playwright browser context and page. */
+  /** Attach event handlers to a Playwright browser context and page. Optionally starts Playwright tracing. */
   async instrument(context: BrowserContext, page: Page): Promise<string> {
     const spanId = this.traceWriter.startSpan({
       name: 'browser-session',
@@ -51,6 +52,12 @@ export class BrowserInstrumentation {
       attributes: { url: page.url(), captureVideo: !!this.options.captureVideo },
     });
     this.spanIds.push(spanId);
+
+    // Start Playwright built-in tracing
+    await context.tracing.start({
+      screenshots: this.options.captureScreenshots,
+      snapshots: true,
+    }).catch(() => {});
 
     // Console events
     if (this.options.captureConsole) {
@@ -183,6 +190,25 @@ export class BrowserInstrumentation {
         });
       } catch {
         // Best effort
+      }
+    }
+
+    // Retain Playwright trace.zip on failure
+    if (outcome !== 'passed') {
+      const ctx = (page.context as any)();
+      if (ctx && typeof ctx.tracing?.stop === 'function') {
+        try {
+          const traceDir = path.resolve(this.runDir, 'browser-evidence');
+          const tracePath = path.join(traceDir, 'trace.zip');
+          await ctx.tracing.stop({ path: tracePath });
+          await this.artifactStore.copy(tracePath, 'playwright-trace', 'trace.zip', {
+            traceId: this.traceWriter.getTraceId(),
+            spanId,
+            subDir: 'browser-evidence',
+          });
+        } catch {
+          // Best effort
+        }
       }
     }
 

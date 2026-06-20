@@ -42,10 +42,17 @@ describe('BrowserInstrumentation', () => {
   });
 
   it('captureEvidence writes artifacts on failure', async () => {
-    // We need a mock page that provides screenshot
+    // We need a mock page that provides screenshot and context for tracing
     const mockPage: any = {
       async screenshot(opts?: any) {
         return Buffer.from('fake-png-data');
+      },
+      context() {
+        return {
+          tracing: {
+            async stop() { /* no-op */ },
+          },
+        };
       },
     };
 
@@ -70,6 +77,13 @@ describe('BrowserInstrumentation', () => {
   it('captureEvidence skips screenshot on pass', async () => {
     const mockPage: any = {
       async screenshot() { return Buffer.from('data'); },
+      context() {
+        return {
+          tracing: {
+            async stop() { /* no-op */ },
+          },
+        };
+      },
     };
 
     const writer = new TraceWriter(tmpDir, 'skip-screenshot');
@@ -89,7 +103,12 @@ describe('BrowserInstrumentation', () => {
     const inst = new BrowserInstrumentation(writer, store, tmpDir);
 
     // Simulate instrumentation
-    const mockCtx: any = { on: () => {} };
+    const mockCtx: any = {
+      on: () => {},
+      tracing: {
+        async start() { /* no-op */ },
+      },
+    };
     const mockPage: any = { on: () => {}, url: () => 'https://example.com' };
 
     await inst.instrument(mockCtx, mockPage);
