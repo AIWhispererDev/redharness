@@ -26,6 +26,10 @@ import { renderChaosSmokeReport, runChaosSmoke } from './chaosSmoke.js';
 import { renderSecuritySmokeReport, runSecuritySmoke } from './securitySmoke.js';
 import { renderPentestReport, runBlackboxPentest } from './pentest.js';
 import { runWhiteboxPentest } from './whiteboxPentest.js';
+import { registerAllSuites } from './suites/registerSuites.js';
+import { registry, RunCoordinator, statusLabel, statusToOk, evaluateRunPolicy, evaluateSuitePolicy, loadManifest, getResumeTargets, computeConfigHash } from './core/index.js';
+import type { ProfileConfig } from './types.js';
+import type { RunManifest, SuiteResultSummary } from './core/runTypes.js';
 
 const program = new Command();
 
@@ -53,10 +57,605 @@ async function writeGenericDrafts(params: {
   return written;
 }
 
+// ---------------------------------------------------------------------------
+// Register all suites on startup
+// ---------------------------------------------------------------------------
+registerAllSuites();
+
+// ---------------------------------------------------------------------------
+// Helper: load profiles from pack.yaml via typed loader
+// ---------------------------------------------------------------------------
+async function loadProfiles(packDir: string): Promise<Record<string, ProfileConfig>> {
+  try {
+    const raw = await readFile(path.join(packDir, 'pack.yaml'), 'utf8');
+    const parsed = YAML.parse(raw);
+    return (parsed as { profiles?: Record<string, ProfileConfig> })?.profiles ?? {};
+  } catch {
+    return {};
+  }
+}
+
 program
   .name('qa-harness')
   .description('General QA harness with app-specific QA packs')
   .version('0.1.0');
+
+// ===========================================================================
+// NEW: list suites
+// ===========================================================================
+program
+  .command('list')
+  .argument('<pack>', 'pack id, e.g. pocket-socrates')
+  .description('List registered suites and profiles')
+  .option('--json', 'output JSON')
+  .option('--tags <tags>', 'filter by comma-separated tags')
+  .action(async (packId, options) => {
+    const allSuites = registry.getAll();
+    const filtered = options.tags
+      ? registry.select({ suites: [], tags: options.tags.split(',').map((t: string) => t.trim()), excludedTags: [] })
+      : allSuites;
+
+    if (options.json) {
+      const profiles = await loadProfiles(defaultPackDir(packId));
+      const suites = filtered.map((s) => ({
+        id: s.id,
+        title: s.title,
+        tags: s.tags,
+        requirement: s.requirement,
+        estimatedDuration: s.estimatedDuration,
+        requires: s.requires ?? [],
+        dependencies: s.dependencies ?? [],
+      }));
+      console.log(JSON.stringify({ pack: packId, profiles, suites }, null, 2));
+    } else {
+      const profiles = await loadProfiles(defaultPackDir(packId));
+      console.log(`# ${packId} — suites and profiles`);
+      console.log('');
+      if (Object.keys(profiles).length > 0) {
+        console.log('## Profiles');
+        for (const [name, profile] of Object.entries(profiles)) {
+          console.log(`- **${name}**: include=${(profile.includeTags ?? []).join(', ')}${profile.excludeTags?.length ? ` exclude=${profile.excludeTags.join(', ')}` : ''}`);
+        }
+        console.log('');
+      }
+      console.log('## Suites');
+      console.log('');
+      for (const suite of filtered) {
+        console.log(`### ${suite.id}`);
+        console.log(`- Title: ${suite.title}`);
+        console.log(`- Tags: ${suite.tags.join(', ')}`);
+        console.log(`- Requirement: ${suite.requirement}`);
+        if (suite.estimatedDuration) console.log(`- Duration: ${suite.estimatedDuration}`);
+        if (suite.requires?.length) console.log(`- Requires: ${suite.requires.join(', ')}`);
+        if (suite.dependencies?.length) console.log(`- Dependencies: ${suite.dependencies.join(', ')}`);
+        console.log(`- Description: ${suite.description}`);
+        console.log('');
+      }
+    }
+  });
+
+// ===========================================================================
+// NEW: run (coordinator-based execution)
+// ===========================================================================
+program
+  .command('run')
+  .argument('<pack>', 'pack id, e.g. pocket-socrates')
+  .option('--profile <name>', 'profile name from pack.yaml (e.g. smoke, release, nightly)')
+  .option('--suite <ids...>', 'suite id(s) to run (repeatable)')
+  .option('--tag <tags...>', 'include tags (repeatable)')
+  .option('--exclude-tag <tags...>', 'exclude tags (repeatable)')
+  .option('--workers <n>', 'max concurrent workers', (v) => Number(v), 3)
+  .option('--retry-errors <n>', 'retry error/cancelled suites up to N times', (v) => Number(v), 0)
+  .option('--storage-state <file>', 'Playwright storage state for authenticated suites')
+  .option('--non-pro-storage-state <file>', 'non-Pro Playwright storage state')
+  .option('--repo <dir>', 'repo directory for whitebox pentest')
+  .option('--headed', 'run browser in headed mode')
+  .option('--output-dir <dir>', 'base output directory for run artifacts')
+  .option('--resume <run-id>', 'resume a previous run by run-id or path')
+  .option('--ci', 'compact CI output')
+  .description('Run suites through the registry/coordinator with selection, profiles, and resume')
+  .action(async (packId, options) => {
+    const packDir = defaultPackDir(packId);
+    const pack = await loadPackFromDir(packDir);
+
+    let selectedSuites: string[] = options.suite ?? [];
+    let selectedTags: string[] = options.tag ?? [];
+    let excludedTags: string[] = options.excludeTag ?? [];
+
+    // Resolve profile if specified
+    if (options.profile) {
+      const profiles = await loadProfiles(packDir);
+      const profile = profiles[options.profile];
+      if (!profile) {
+        console.error(`Unknown profile: ${options.profile}. Available: ${Object.keys(profiles).join(', ')}`);
+        process.exitCode = 1;
+        return;
+      }
+      selectedTags = [...new Set([...selectedTags, ...(profile.includeTags ?? [])])];
+      excludedTags = [...new Set([...excludedTags, ...(profile.excludeTags ?? [])])];
+    }
+
+    // Resolve resume target
+    let resumeExistingResults: SuiteResultSummary[] | undefined;
+    let resumePendingIds: string[] | undefined;
+    let resumeRunDir = '';
+    let resumeRunId: string | undefined;
+    if (options.resume) {
+      const candidateDir = path.resolve(options.resume);
+      const runsDir = path.resolve(process.cwd(), 'runs', packId);
+      let manifest = await loadManifest(candidateDir);
+      if (!manifest) {
+        const candidateRunDir = path.join(runsDir, options.resume);
+        manifest = await loadManifest(candidateRunDir);
+        if (manifest) resumeRunDir = candidateRunDir;
+      } else {
+        resumeRunDir = candidateDir;
+      }
+      if (!manifest) {
+        console.error(`Cannot resume: no run found for "${options.resume}"`);
+        process.exitCode = 1;
+        return;
+      }
+      resumeRunId = manifest.runId;
+      // Carry forward the original selection if not overridden (BEFORE hash check)
+      if (selectedSuites.length === 0 && selectedTags.length === 0 && excludedTags.length === 0) {
+        selectedSuites = manifest.selection.suites;
+        selectedTags = manifest.selection.tags;
+        excludedTags = manifest.selection.excludedTags;
+      }
+      // Compute config hash using the restored selection
+      const currentConfigHash = computeConfigHash({
+        packId,
+        profile: options.profile,
+        policy: { retryErrors: options.retryErrors ?? 0, maxWorkers: options.workers ?? 3 },
+        selection: { suites: selectedSuites, tags: selectedTags, excludedTags },
+        source: options.ci ? 'ci' : 'local',
+      });
+      const resumeTargets = getResumeTargets(manifest, currentConfigHash);
+      resumeExistingResults = manifest.suiteResults.filter(
+        (sr) => !resumeTargets.pendingSuiteIds.includes(sr.suiteId),
+      );
+      resumePendingIds = resumeTargets.pendingSuiteIds;
+      console.log(`Resuming run: ${manifest.runId} — ${resumeTargets.pendingSuiteIds.length} suites pending, ${resumeExistingResults.length} already completed`);
+    }
+
+    const coordinator = new RunCoordinator({
+      packDir,
+      packId,
+      source: options.ci ? 'ci' : 'local',
+      profile: options.profile,
+      selection: {
+        suites: selectedSuites,
+        tags: selectedTags,
+        excludedTags: excludedTags,
+      },
+      policy: {
+        retryErrors: options.retryErrors,
+        maxWorkers: options.workers,
+      },
+      baseUrl: pack.baseUrl,
+      storageState: options.storageState,
+      nonProStorageState: options.nonProStorageState,
+      repo: options.repo,
+      headless: !options.headed,
+      runDir: resumeRunDir || undefined,
+      runId: resumeRunId,
+      existingResults: resumeExistingResults,
+      pendingSuiteIds: resumePendingIds,
+    });
+
+    let manifest: RunManifest;
+    try {
+      manifest = await coordinator.execute();
+    } catch (error) {
+      console.error(`Run failed: ${error instanceof Error ? error.message : String(error)}`);
+      process.exitCode = 1;
+      return;
+    }
+
+    // Render output
+    const runDir = coordinator.getRunDir();
+    const sections: RunSection[] = manifest.suiteResults.map((sr) => ({
+      name: sr.title || sr.suiteId,
+      ok: evaluateSuitePolicy(sr.status, sr.requirement).isPassing,
+      status: sr.status as any,
+      markdown: `Suite: ${sr.suiteId}\n- Status: ${statusLabel(sr.status)}\n- Duration: ${sr.durationMs ? `${(sr.durationMs / 1000).toFixed(1)}s` : 'N/A'}\n- Attempts: ${sr.attemptCount}`,
+      artifacts: [],
+      requirement: sr.requirement,
+      skipReason: sr.skipReason,
+      durationMs: sr.durationMs,
+    }));
+
+    if (options.ci) {
+      const { renderCompactManifestSummary } = await import('./runDir.js');
+      console.log(renderCompactManifestSummary(manifest, pack.name, runDir));
+    } else {
+      const summary = renderRunSummary(pack.name, sections);
+      console.log(summary);
+    }
+
+    console.log(`\nRun manifest: ${path.join(runDir, 'run.json')}`);
+
+    // Use policy evaluation for exit code (required skipped suites fail the run)
+    const policyResult = evaluateRunPolicy(manifest.suiteResults);
+    if (!policyResult.isPassing) {
+      process.exitCode = 1;
+    }
+  });
+
+// ===========================================================================
+// PRD 03: Dataset and scenario commands
+// ===========================================================================
+
+program
+  .command('dataset')
+  .argument('<pack>', 'pack id')
+  .argument('[dataset-id]', 'dataset id')
+  .option('--validate', 'validate the dataset')
+  .description('List or validate datasets for a pack')
+  .action(async (packId, datasetId, options) => {
+    const datasetBase = path.resolve(defaultPackDir(packId), 'datasets');
+    if (datasetId) {
+      const dsDir = path.join(datasetBase, datasetId);
+      const { loadScenariosFromDir, loadDatasetManifest, validateScenario } = await import('./scenarios/loader.js');
+      const {
+        validateSplitRefs,
+        validateDatasetContent,
+      } = await import('./datasets/manifest.js');
+
+      const scenarios = await loadScenariosFromDir(dsDir);
+      const manifest = await loadDatasetManifest(dsDir);
+
+      if (options.validate) {
+        const errors: string[] = [];
+        for (const s of scenarios) {
+          errors.push(...validateScenario(s).map((e) => `Scenario ${s.id}: ${e}`));
+        }
+        if (manifest) {
+          const ids = new Set(scenarios.map((s) => s.id));
+          errors.push(...validateSplitRefs(manifest as any, ids));
+          errors.push(...validateDatasetContent(manifest as any, scenarios));
+        }
+        if (errors.length === 0) {
+          console.log(`Dataset ${datasetId}: valid (${scenarios.length} scenarios)`);
+        } else {
+          for (const e of errors) console.error(`- ${e}`);
+          process.exitCode = 1;
+        }
+      } else {
+        console.log(`# Dataset: ${datasetId}`);
+        if (manifest) console.log(`Version: ${(manifest as any).version}`);
+        console.log(`Scenarios: ${scenarios.length}`);
+        for (const s of scenarios) {
+          console.log(`\n### ${s.id}`);
+          console.log(`- Title: ${s.title}`);
+          console.log(`- Tags: ${s.tags.join(', ')}`);
+          console.log(`- Steps: ${s.steps.length}`);
+          console.log(`- Assertions: ${s.expected.length}`);
+          if (s.trials) console.log(`- Trials: ${s.trials}`);
+        }
+      }
+    } else {
+      // List datasets
+      const { readdir } = await import('node:fs/promises');
+      try {
+        const entries = await readdir(datasetBase, { withFileTypes: true });
+        const datasets = entries.filter((e: any) => e.isDirectory()).map((e: any) => e.name);
+        console.log(`Datasets for ${packId}: ${datasets.join(', ') || '(none)'}`);
+      } catch {
+        console.log(`Datasets for ${packId}: (none)`);
+      }
+    }
+  });
+
+program
+  .command('eval')
+  .argument('<pack>', 'pack id')
+  .argument('<dataset>', 'dataset id')
+  .option('--split <name>', 'dataset split to run')
+  .option('--scenario <id>', 'single scenario id')
+  .option('--trials <n>', 'override trial count', (v) => Number(v))
+  .option('--storage-state <file>', 'Playwright storage state')
+  .option('--headed', 'run browser in headed mode')
+  .option('--output-dir <dir>', 'output directory for results')
+  .description('Evaluate a dataset or scenario against the application')
+  .action(async (packId, datasetId, options) => {
+    const packDir = defaultPackDir(packId);
+    const pack = await loadPackFromDir(packDir);
+    if (!pack.baseUrl) { console.error('Pack has no baseUrl'); process.exitCode = 1; return; }
+
+    const dsDir = path.resolve(packDir, 'datasets', datasetId);
+    const { loadScenariosFromDir, loadDatasetManifest } = await import('./scenarios/loader.js');
+    const { runScenario } = await import('./scenarios/runner.js');
+    const { getSplitScenarios } = await import('./datasets/manifest.js');
+
+    let scenarios = await loadScenariosFromDir(dsDir);
+    const manifest = await loadDatasetManifest(dsDir);
+
+    // Filter by split or explicit scenario
+    if (options.split && manifest) {
+      const splitIds = new Set(getSplitScenarios(manifest as any, options.split as any));
+      scenarios = scenarios.filter((s) => splitIds.has(s.id));
+    } else if (options.scenario) {
+      scenarios = scenarios.filter((s) => s.id === options.scenario);
+    }
+
+    if (scenarios.length === 0) {
+      console.error('No scenarios matched the selection');
+      process.exitCode = 1;
+      return;
+    }
+
+    const outputDir = options.outputDir ?? path.resolve(process.cwd(), 'runs', packId, `eval-${datasetId}-${Date.now()}`);
+    await (await import('node:fs/promises')).mkdir(outputDir, { recursive: true });
+
+    for (const scenario of scenarios) {
+      const trialsOverride = options.trials;
+      const scenarioToRun = trialsOverride ? { ...scenario, trials: trialsOverride } : scenario;
+
+      console.log(`Running: ${scenarioToRun.title || scenarioToRun.id} (${scenarioToRun.trials ?? 1} trial(s))`);
+      const result = await runScenario(scenarioToRun, {
+        packDir,
+        baseUrl: pack.baseUrl,
+        storageState: options.storageState,
+        headless: !options.headed,
+        outputDir,
+      });
+
+      // Write result
+      await (await import('node:fs/promises')).writeFile(
+        path.join(outputDir, `${scenario.id}.json`),
+        JSON.stringify(result, null, 2),
+        'utf8',
+      );
+
+      // Print summary
+      console.log(`  Status: ${result.status}`);
+      console.log(`  Trials: ${result.trials.length}, duration: ${(result.durationMs / 1000).toFixed(1)}s`);
+      for (const trial of result.trials) {
+        console.log(`  Trial ${trial.trial}: ${trial.status} (${trial.durationMs}ms, ${trial.assertions.length} assertions, ${trial.grades.length} grades)`);
+      }
+
+      if (result.status === 'failed' || result.status === 'error') {
+        process.exitCode = 1;
+      }
+    }
+
+    console.log(`\nResults in: ${outputDir}`);
+  });
+
+// ===========================================================================
+// PRD 04: Agent Runtime commands
+// ===========================================================================
+
+program
+  .command('agent')
+  .argument('<action>', 'run | resume | approve | cancel')
+  .argument('<pack>', 'pack id')
+  .option('--scenario <id>', 'scenario ID')
+  .option('--agent <name>', 'agent name/version')
+  .option('--model <provider/model>', 'model identifier')
+  .option('--instructions <text>', 'agent instructions/system prompt')
+  .option('--turns <n>', 'max turns', (v) => Number(v), 30)
+  .option('--wall-time <ms>', 'max wall time in ms', (v) => Number(v), 300000)
+  .option('--storage-state <file>', 'Playwright storage state')
+  .option('--headed', 'run browser in headed mode')
+  .option('--output-dir <dir>', 'output directory')
+  .option('--run-id <id>', 'resume target run ID')
+  .option('--ai', 'allow AI approval decisions')
+  .description('Run, resume, approve, or cancel an agentic QA run')
+  .action(async (action, packId, options) => {
+    if (action === 'run') {
+      console.log(`Agent run: ${packId} scenario=${options.scenario ?? '(none)'}`);
+      console.log(`Agent: ${options.agent ?? 'exploratory-qa'}`);
+      console.log(`Model: ${options.model ?? 'default'}`);
+      console.log(`Max turns: ${options.turns}, Wall time: ${options.wallTime}ms`);
+      // In future: create agent runtime and execute
+      console.log('Agent runtime execution not yet bound to Live models.');
+      console.log('Use PRD 04 agent/runtime.ts with FakeModelAdapter for testing.');
+    } else if (action === 'resume') {
+      console.log(`Resuming run: ${options.runId ?? '(none)'}`);
+    } else if (action === 'approve') {
+      console.log(`Approving request for run: ${options.runId ?? '(none)'}`);
+    } else if (action === 'cancel') {
+      console.log(`Cancelling run: ${options.runId ?? '(none)'}`);
+    } else {
+      console.error(`Unknown agent action: ${action}. Use: run, resume, approve, cancel`);
+      process.exitCode = 1;
+    }
+  });
+
+// ===========================================================================
+// PRD 05: Red-team commands
+// ===========================================================================
+
+program
+  .command('redteam')
+  .argument('<pack>', 'pack id')
+  .option('--dataset <id>', 'dataset id')
+  .option('--split <name>', 'dataset split')
+  .option('--category <category>', 'OWASP category (e.g. ASI01)')
+  .option('--trials <n>', 'trials per attack', (v) => Number(v), 3)
+  .option('--environment <name>', 'environment: fixture|staging|production', 'fixture')
+  .option('--output-dir <dir>', 'output directory')
+  .description('Run OWASP Agentic Top 10 red-team security evaluation')
+  .action(async (packId, options) => {
+    console.log(`Red-team evaluation: ${packId}`);
+    console.log(`Category: ${options.category ?? '(all initial-release categories)'}`);
+    console.log(`Environment: ${options.environment}`);
+    console.log(`Trials per attack: ${options.trials}`);
+    console.log('');
+    console.log('Registered attacks:');
+    const { attackRegistry } = await import('./redteam/attackRegistry.js');
+    const { getInitialReleaseCategories } = await import('./redteam/owaspMapping.js');
+    const attacks = attackRegistry.getAll();
+    const filtered = options.category
+      ? attacks.filter((a: any) => a.category === options.category)
+      : attacks;
+    for (const attack of filtered) {
+      console.log(`- [${attack.riskLevel}] ${attack.category} ${attack.name}: ${attack.description}`);
+    }
+    console.log(`\n${filtered.length} attack(s) loaded.`);
+    console.log('\nNOTE: Full execution requires a running agent runtime.');
+  });
+
+program
+  .command('redteam-compare')
+  .argument('<baseline-run>', 'baseline run ID')
+  .argument('<candidate-run>', 'candidate run ID')
+  .description('Compare red-team runs')
+  .action(async (baseline, candidate) => {
+    const { HarnessService } = await import('./service/harnessService.js');
+    const service = new HarnessService();
+    const result = await service.compareRuns(baseline, candidate);
+    if (result.error) {
+      console.error(result.error);
+      process.exitCode = 1;
+    } else {
+      const { formatComparisonSummary } = await import('./experiments/comparison.js');
+      console.log(formatComparisonSummary(result.comparison!));
+    }
+  });
+
+// ===========================================================================
+// PRD 06: Experiment, Compare, Baseline, Report, and MCP commands
+// ===========================================================================
+
+program
+  .command('experiment')
+  .argument('<pack>', 'pack id')
+  .argument('<file>', 'experiment YAML file')
+  .option('--output-dir <dir>', 'output directory')
+  .description('Run an experiment comparing candidate configurations')
+  .action(async (packId, file, options) => {
+    const experimentYaml = await readFile(file, 'utf8');
+    const experiment = YAML.parse(experimentYaml);
+    console.log(`Experiment: ${experiment.experimentId ?? '(unnamed)'}`);
+    console.log(`Dataset: ${experiment.datasetId}`);
+    console.log(`Candidates: ${experiment.candidates?.length ?? 0}`);
+    if (experiment.baseline) console.log('Baseline: configured');
+    console.log(`Trials: ${experiment.trials ?? 1}`);
+    console.log('');
+    console.log('NOTE: Full experiment execution requires suite binding.');
+  });
+
+program
+  .command('compare')
+  .argument('<baseline-run>', 'baseline run ID')
+  .argument('<candidate-run>', 'candidate run ID')
+  .option('--json', 'output JSON')
+  .description('Compare two run manifests')
+  .action(async (baseline, candidate, options) => {
+    const { HarnessService } = await import('./service/harnessService.js');
+    const service = new HarnessService();
+    const result = await service.compareRuns(baseline, candidate);
+    if (result.error) {
+      console.error(result.error);
+      process.exitCode = 1;
+      return;
+    }
+    if (options.json) {
+      console.log(JSON.stringify(result.comparison, null, 2));
+    } else {
+      const { formatComparisonSummary } = await import('./experiments/comparison.js');
+      console.log(formatComparisonSummary(result.comparison!));
+    }
+  });
+
+program
+  .command('baseline')
+  .argument('<action>', 'promote | list')
+  .argument('[run-id]', 'run ID to promote')
+  .option('--name <name>', 'baseline name (e.g. release-2026-06)')
+  .description('Promote or list baselines for comparison')
+  .action(async (action, runId, options) => {
+    if (action === 'list') {
+      console.log('Baselines: (not yet stored)');
+    } else if (action === 'promote') {
+      if (!runId) {
+        console.error('run-id required for promote');
+        process.exitCode = 1;
+        return;
+      }
+      console.log(`Promoting run ${runId} as baseline "${options.name ?? 'default'}"`);
+      // In future: persist baseline reference
+    } else {
+      console.error(`Unknown baseline action: ${action}. Use: promote, list`);
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command('generate-report')
+  .argument('<format>', 'junit | sarif | github-summary')
+  .argument('<run-id>', 'run ID')
+  .option('--output <file>', 'output file path')
+  .description('Generate CI-compatible reports from a run manifest')
+  .action(async (format, runId, options) => {
+    const { HarnessService } = await import('./service/harnessService.js');
+    const service = new HarnessService();
+
+    let output: string | null = null;
+    if (format === 'junit') {
+      output = await service.generateJUnit(runId);
+    } else if (format === 'sarif') {
+      const sarif = await service.generateSarif(runId);
+      if (sarif) output = JSON.stringify(sarif, null, 2);
+    } else if (format === 'github-summary') {
+      const { entry } = await service.getRun(runId);
+      if (entry) {
+        const manifest = await (await import('./core/resumeStore.js')).loadManifest(entry.runDir);
+        if (manifest) {
+          const { generateGitHubStepSummary, generateGitHubAnnotations } = await import('./reporters/github.js');
+          output = generateGitHubStepSummary(manifest);
+          const annotations = generateGitHubAnnotations(manifest);
+          if (annotations.length > 0) {
+            output += '\n### Annotations\n';
+            for (const a of annotations) {
+              output += `\n\`${a}\``;
+            }
+          }
+        }
+      }
+    } else {
+      console.error(`Unknown report format: ${format}. Use: junit, sarif, github-summary`);
+      process.exitCode = 1;
+      return;
+    }
+
+    if (!output) {
+      console.error(`No output generated for ${format} ${runId}`);
+      process.exitCode = 1;
+      return;
+    }
+
+    if (options.output) {
+      await writeFile(options.output, output, 'utf8');
+      console.log(`Report written: ${options.output}`);
+    } else {
+      console.log(output);
+    }
+  });
+
+program
+  .command('mcp')
+  .description('Start the MCP server for AI-agent integration')
+  .option('--allow-run', 'allow run/cancel operations', false)
+  .option('--packs-dir <dir>', 'packs directory')
+  .option('--runs-dir <dir>', 'runs directory')
+  .action(async (options) => {
+    const { startStdioServer } = await import('./mcp/server.js');
+    console.error('Starting MCP server over stdio...');
+    await startStdioServer({
+      allowRunOperations: options.allowRun,
+      packsDir: options.packsDir,
+      runsBaseDir: options.runsDir,
+    });
+  });
+
+// ===========================================================================
+// LEGACY COMMANDS (unchanged, retained as wrappers during migration)
+// ===========================================================================
 
 program
   .command('checklist')
@@ -455,6 +1054,7 @@ program
     if (!result.ok) process.exitCode = 1;
   });
 
+// Legacy all-smoke: now re-implemented through the coordinator but kept as wrapper
 program
   .command('all-smoke')
   .argument('<pack>', 'pack id, e.g. pocket-socrates')
@@ -462,64 +1062,65 @@ program
   .option('--output-dir <dir>', 'base artifact output directory', 'artifacts/pocket-socrates/all-smoke')
   .option('--run-dir <dir|auto>', 'write to a specific run directory, or use auto for runs/<pack>/<timestamp>')
   .option('--ci', 'compact CI output; still writes markdown, JSON, artifacts, and drafts')
-  .description('Run all currently implemented Pocket Socrates smoke suites')
+  .description('Run all registered smoke-tagged suites through the coordinator')
   .action(async (packId, options) => {
-    const pack = await loadPackFromDir(defaultPackDir(packId));
+    // Use the coordinator with smoke profile
+    const packDir = defaultPackDir(packId);
+    const pack = await loadPackFromDir(packDir);
     const baseDir = resolveRunDir({ packId, outputDir: options.outputDir, runDir: options.runDir });
-    const sections: RunSection[] = [];
-    const draftDir = path.join(baseDir, 'drafts');
-    const draftPaths: string[] = [];
 
-    const publicRoutes = await runPublicSmoke(pack);
-    const publicSummary = summarizeSmokeResults(publicRoutes);
-    sections.push({ name: 'public routes', ok: publicSummary.ok, markdown: renderSmokeReport(pack.name, publicRoutes), artifacts: [] });
-    draftPaths.push(
-      ...(await writeGenericDrafts({ packName: pack.name, suiteName: 'public routes', checks: publicRoutes, draftDir })),
-    );
+    // Load smoke profile tags
+    const profiles = await loadProfiles(packDir);
+    const smokeProfile = profiles['smoke'];
+    const tags = smokeProfile?.includeTags ?? ['smoke'];
+    const excludedTags = smokeProfile?.excludeTags ?? [];
 
-    const publicNav = await runPublicNavSmoke(pack, { outputDir: path.join(baseDir, 'public-nav') });
-    sections.push({ name: 'public nav', ok: publicNav.ok, markdown: renderPublicNavSmokeReport(pack.name, publicNav), artifacts: publicNav.artifacts });
-    draftPaths.push(
-      ...(await writeGenericDrafts({ packName: pack.name, suiteName: 'public nav', checks: publicNav.checks, artifacts: publicNav.artifacts, draftDir })),
-    );
+    const coordinator = new RunCoordinator({
+      packDir,
+      packId,
+      source: options.ci ? 'ci' : 'local',
+      profile: 'smoke',
+      selection: { suites: [], tags, excludedTags },
+      policy: { retryErrors: 0, maxWorkers: 3 },
+      baseUrl: pack.baseUrl,
+      storageState: options.storageState,
+      runDir: baseDir,
+    });
 
-    const browser = await runBrowserSmoke(pack, { outputDir: path.join(baseDir, 'early-access') });
-    sections.push({ name: 'early access/TOS', ok: browser.ok, markdown: renderBrowserSmokeReport(pack.name, browser), artifacts: browser.artifacts });
-    draftPaths.push(
-      ...(await writeGenericDrafts({ packName: pack.name, suiteName: 'early access TOS', checks: browser.checks, artifacts: browser.artifacts, draftDir })),
-    );
+    const manifest = await coordinator.execute();
+    const runDir = coordinator.getRunDir();
 
-    const auth = await runAuthSmoke({ baseUrl: pack.baseUrl!, storageState: options.storageState, outputDir: path.join(baseDir, 'auth') });
-    sections.push({ name: 'authenticated dashboard', ok: auth.ok, markdown: renderAuthSmokeReport(pack.name, auth), artifacts: auth.artifacts });
-    draftPaths.push(
-      ...(await writeGenericDrafts({ packName: pack.name, suiteName: 'authenticated dashboard', checks: auth.checks, artifacts: auth.artifacts, draftDir })),
-    );
+    // Build sections for legacy rendering
+    const { renderCompactManifestSummary } = await import('./runDir.js');
+    const sections: RunSection[] = manifest.suiteResults.map((sr) => ({
+      name: sr.title || sr.suiteId,
+      ok: evaluateSuitePolicy(sr.status, sr.requirement).isPassing,
+      status: sr.status as any,
+      markdown: `Suite: ${sr.suiteId}\n- Status: ${statusLabel(sr.status)}\n- Duration: ${sr.durationMs ? `${(sr.durationMs / 1000).toFixed(1)}s` : 'N/A'}`,
+      artifacts: [],
+    }));
 
-    const crucible = await runCrucibleSmoke(pack, { storageState: options.storageState, outputDir: path.join(baseDir, 'crucible') });
-    sections.push({ name: 'crucible', ok: crucible.ok, markdown: renderCrucibleSmokeReport(pack.name, crucible), artifacts: crucible.artifacts });
-    draftPaths.push(
-      ...(await writeGenericDrafts({ packName: pack.name, suiteName: 'crucible', checks: crucible.checks, artifacts: crucible.artifacts, draftDir })),
-    );
-
-    const markdown = renderRunSummary(pack.name, sections);
+    // Write legacy summary files for backward compat
+    const summary = renderRunSummary(pack.name, sections);
     const summaryJson = buildRunSummaryJson(pack.name, sections);
-    await mkdir(baseDir, { recursive: true });
-    const summaryPath = path.join(baseDir, 'summary.md');
-    const summaryJsonPath = path.join(baseDir, 'summary.json');
-    await writeFile(summaryPath, markdown, 'utf8');
-    await writeFile(summaryJsonPath, JSON.stringify(summaryJson, null, 2), 'utf8');
+    await mkdir(runDir, { recursive: true });
+    await writeFile(path.join(runDir, 'summary.md'), summary, 'utf8');
+    await writeFile(path.join(runDir, 'summary.json'), JSON.stringify(summaryJson, null, 2), 'utf8');
+
     if (options.ci) {
-      console.log(renderCompactRunSummary(pack.name, sections, baseDir));
-      console.log(`Summary written: ${summaryPath}`);
-      console.log(`JSON written: ${summaryJsonPath}`);
-      if (draftPaths.length) console.log(`Draft count: ${draftPaths.length}`);
+      console.log(renderCompactManifestSummary(manifest, pack.name, runDir));
+      console.log(`Summary written: ${path.join(runDir, 'summary.md')}`);
+      console.log(`JSON written: ${path.join(runDir, 'summary.json')}`);
+      console.log(`Run manifest: ${path.join(runDir, 'run.json')}`);
     } else {
-      console.log(markdown);
-      console.log(`\nSummary written: ${summaryPath}`);
-      console.log(`JSON written: ${summaryJsonPath}`);
-      if (draftPaths.length) console.log(`Drafts written:\n${draftPaths.map((item) => `- ${item}`).join('\n')}`);
+      console.log(summary);
+      console.log(`\nSummary written: ${path.join(runDir, 'summary.md')}`);
+      console.log(`JSON written: ${path.join(runDir, 'summary.json')}`);
+      console.log(`Run manifest: ${path.join(runDir, 'run.json')}`);
     }
-    if (!sections.every((section) => section.ok)) process.exitCode = 1;
+
+    const policyResult = evaluateRunPolicy(manifest.suiteResults);
+    if (!policyResult.isPassing) process.exitCode = 1;
   });
 
 await program.parseAsync(process.argv);

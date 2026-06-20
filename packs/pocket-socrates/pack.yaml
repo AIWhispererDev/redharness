@@ -117,6 +117,15 @@ reports:
       - Soc Exact Response
       - Notes
 
+profiles:
+  smoke:
+    includeTags: [smoke]
+  release:
+    includeTags: [smoke, authenticated, ai-quality, security]
+    excludeTags: [long, exploratory]
+  nightly:
+    includeTags: [smoke, authenticated, ai-quality, security, long, exploratory]
+
 smoke:
   publicRoutes:
     - path: /landing

@@ -9,7 +9,7 @@ describe('run summary', () => {
     ]);
 
     expect(markdown).toContain('# Pocket Socrates QA run summary');
-    expect(markdown).toContain('Overall: failed');
+    expect(markdown).toContain('Overall: Failed');
     expect(markdown).toContain('✅ public routes');
     expect(markdown).toContain('❌ crucible');
     expect(markdown).toContain('# Public');

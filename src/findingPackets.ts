@@ -1,5 +1,13 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import type { FindingPacketV2, ReplaySpec, ArtifactRef, FindingLifecycleState } from './trace/traceTypes.js';
+import { compileBrowserSpec, compileHttpSpec, compileGuidedSpec } from './replay/replayCompiler.js';
+import { ArtifactStore } from './artifacts/artifactStore.js';
+import { randomUUID } from 'node:crypto';
+
+// ---------------------------------------------------------------------------
+// Legacy v1 finding packet (preserved for backward compat)
+// ---------------------------------------------------------------------------
 
 export type FindingPacketInput = {
   outputDir: string;
@@ -61,10 +69,150 @@ export async function writeFindingPacket(input: FindingPacketInput): Promise<Fin
     '',
   ].join('\n');
 
-  const replay = `import { test, expect } from '@playwright/test';\n\ntest('${input.finding.title.replace(/'/g, "\\'")}', async ({ page }) => {\n  // TODO: replay the exact finding steps from finding.json.\n  expect(true).toBe(true);\n});\n`;
+  const replay = `import { test, expect } from '@playwright/test';\n\ntest('${input.finding.title.replace(/'/g, "\\'")}', async ({ page }) => {\n  // TODO: replay the exact finding steps from finding.json.\n  // PRD 02: This file should be replaced by an executable replay spec.\n  expect(true).toBe(true);\n});\n`;
 
   await writeFile(markdownPath, md, 'utf8');
   await writeFile(jsonPath, JSON.stringify({ packName: input.packName, ...input.finding }, null, 2), 'utf8');
   await writeFile(replayPath, replay, 'utf8');
   return { dir, markdownPath, jsonPath, replayPath };
+}
+
+// ---------------------------------------------------------------------------
+// PRD 02: Finding Packet v2 with trace-integrated evidence and real replay
+// ---------------------------------------------------------------------------
+
+export type FindingPacketV2Input = {
+  packId: string;
+  baseUrl?: string;
+  title: string;
+  severity: string;
+  category: string;
+  suiteId: string;
+  check: string;
+  expectedState: string;
+  actualState: string;
+  steps: string[];
+  lifecycleState?: FindingLifecycleState;
+  store: ArtifactStore;
+  attemptId: string;
+  traceId: string;
+  recordedActions?: import('./trace/traceTypes.js').RecordedAction[];
+  httpCapture?: import('./replay/httpReplay.js').HttpCapture;
+  assertion?: import('./trace/traceTypes.js').AssertionRecipe;
+};
+
+/**
+ * Write a PRD 02 finding packet with evidence manifest and executable replay.
+ *
+ * Returns the v2 finding ID and packet directory.
+ */
+export async function writeFindingPacketV2(input: FindingPacketV2Input): Promise<{ findingId: string; dir: string; packet: FindingPacketV2 }> {
+  const findingId = slugifyFinding(input.title) + '-' + randomUUID().replace(/-/g, '').slice(0, 8);
+  const findDir = path.join(input.store['baseDir'], 'findings', findingId);
+  await mkdir(findDir, { recursive: true });
+
+  // Build replay spec
+  let replaySpec: ReplaySpec | undefined;
+  let specArtifacts: ArtifactRef[] = [];
+
+  if (input.httpCapture) {
+    const { writeHttpReplay } = await import('./replay/httpReplay.js');
+    const result = await writeHttpReplay(input.httpCapture, findingId, input.store);
+    replaySpec = result.spec;
+    specArtifacts = result.artifacts;
+  } else if (input.recordedActions && input.assertion) {
+    const specCode = compileBrowserSpec(input.recordedActions, input.assertion, findingId);
+    const specRef = await input.store.writeText('replay-spec', specCode, `replay.spec.ts`, { subDir: `findings/${findingId}` });
+    replaySpec = { mode: 'browser', actions: input.recordedActions, assertion: input.assertion, setup: [], linkedArtifactIds: [] };
+    specArtifacts = [specRef];
+  } else {
+    // Guided replay
+    const specCode = compileGuidedSpec(
+      {
+        findingId,
+        lifecycleState: 'suspected',
+        title: input.title,
+        severity: input.severity,
+        category: input.category,
+        originatingSuiteId: input.suiteId,
+        originatingCheck: input.check,
+        initialAttemptId: input.attemptId,
+        confirmationAttemptIds: [],
+        reproductionCount: 0,
+        environment: { packId: input.packId, baseUrl: input.baseUrl },
+        evidenceManifest: { runId: '', attemptId: input.attemptId, traceId: input.traceId, artifacts: [], redactionSummary: [] },
+        redactionSummary: [],
+        expectedState: input.expectedState,
+        actualState: input.actualState,
+        steps: input.steps,
+      },
+      ['Cannot deterministically reconstruct all steps from available data'],
+    );
+    const specRef = await input.store.writeText('replay-spec', specCode, `replay.spec.ts`, { subDir: `findings/${findingId}` });
+    replaySpec = { mode: 'guided', setupHint: input.expectedState, unresolvedSteps: input.steps, linkedArtifactIds: [] };
+    specArtifacts = [specRef];
+  }
+
+  // Build evidence manifest (store already tracks all written artifacts)
+  const manifest = input.store.buildManifest({ attemptId: input.attemptId, traceId: input.traceId });
+  // specArtifacts are already in store.writeText calls above, so no duplicate push needed
+  await input.store.saveManifest(input.attemptId, input.traceId);
+
+  // Build finding packet JSON
+  const packet: FindingPacketV2 = {
+    findingId,
+    lifecycleState: input.lifecycleState ?? 'suspected',
+    title: input.title,
+    severity: input.severity,
+    category: input.category,
+    originatingSuiteId: input.suiteId,
+    originatingCheck: input.check,
+    initialAttemptId: input.attemptId,
+    confirmationAttemptIds: [],
+    reproductionCount: 1,
+    environment: { packId: input.packId, baseUrl: input.baseUrl },
+    evidenceManifest: manifest,
+    redactionSummary: [],
+    expectedState: input.expectedState,
+    actualState: input.actualState,
+    steps: input.steps,
+  };
+
+  // Write packet JSON
+  await writeFile(path.join(findDir, 'finding.json'), JSON.stringify(packet, null, 2), 'utf8');
+
+  // Write markdown summary
+  const md = [
+    `# ${input.title}`,
+    '',
+    `- Finding ID: ${findingId}`,
+    `- Lifecycle: ${packet.lifecycleState}`,
+    `- Severity: ${input.severity}`,
+    `- Category: ${input.category}`,
+    `- Suite: ${input.suiteId}`,
+    '',
+    '## Steps',
+    '',
+    ...input.steps.map((s, i) => `${i + 1}. ${s}`),
+    '',
+    '## Expected',
+    '',
+    input.expectedState,
+    '',
+    '## Actual',
+    '',
+    input.actualState,
+    '',
+    '## Replay',
+    '',
+    replaySpec ? `- Mode: ${replaySpec.mode}` : '- No replay available',
+    '',
+    '## Evidence',
+    '',
+    ...manifest.artifacts.map((a) => `- ${a.kind}: ${a.relativePath} (${a.sha256.slice(0, 12)}...)`),
+    '',
+  ].join('\n');
+  await writeFile(path.join(findDir, 'finding.md'), md, 'utf8');
+
+  return { findingId, dir: findDir, packet };
 }

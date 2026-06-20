@@ -68,6 +68,15 @@ const packSchema = z.object({
       }),
     })
     .optional(),
+  profiles: z
+    .record(
+      z.string(),
+      z.object({
+        includeTags: z.array(z.string()),
+        excludeTags: z.array(z.string()).optional(),
+      }),
+    )
+    .optional(),
 });
 
 export async function loadPackFromDir(packDir: string): Promise<QaPack> {

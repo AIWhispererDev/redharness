@@ -10,9 +10,10 @@ describe('run summary JSON', () => {
 
     expect(json.packName).toBe('Pocket Socrates');
     expect(json.ok).toBe(false);
+    expect(json.status).toBe('failed');
     expect(json.sections).toEqual([
-      { name: 'public nav', ok: true, artifacts: ['mobile-menu.png'] },
-      { name: 'early access/TOS', ok: false, artifacts: ['blank.png'] },
+      { name: 'public nav', ok: true, status: 'passed', artifacts: ['mobile-menu.png'], requirement: undefined, skipReason: undefined, durationMs: undefined },
+      { name: 'early access/TOS', ok: false, status: 'failed', artifacts: ['blank.png'], requirement: undefined, skipReason: undefined, durationMs: undefined },
     ]);
   });
 });

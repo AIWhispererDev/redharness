@@ -101,3 +101,27 @@ export type ValidationResult = {
   warnings: string[];
   markdown: string;
 };
+
+// ---------------------------------------------------------------------------
+// Profile definitions (may live in pack.yaml)
+// ---------------------------------------------------------------------------
+
+export type ProfileConfig = {
+  includeTags: string[];
+  excludeTags?: string[];
+};
+
+// ---------------------------------------------------------------------------
+// Backward-compatible ExecutionStatus re-export for legacy code
+// ---------------------------------------------------------------------------
+
+export type ExecutionStatus = 'passed' | 'failed' | 'skipped' | 'error' | 'cancelled';
+export type RequirementPolicy = 'required' | 'optional' | 'informational';
+
+/**
+ * Extended QaPack with optional profiles field.
+ * This allows packs to declare named profiles inline.
+ */
+export type QaPackWithProfiles = QaPack & {
+  profiles?: Record<string, ProfileConfig>;
+};
