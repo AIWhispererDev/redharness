@@ -215,6 +215,22 @@ export class RunCatalog {
     }
   }
 
+  async getBaseline(name: string): Promise<BaselineEntry | null> {
+    const database = await this.db();
+    try {
+      const row = database.prepare('SELECT name, run_id, promoted_at FROM baselines WHERE name = ?').get(name);
+      if (!row) return null;
+      const r = row as Record<string, unknown>;
+      return {
+        name: String(r.name),
+        runId: String(r.run_id),
+        promotedAt: String(r.promoted_at),
+      };
+    } finally {
+      this.close();
+    }
+  }
+
   async promoteBaseline(name: string, runId: string): Promise<BaselineEntry> {
     if (!await this.getRun(runId)) throw new Error(`Run not found: ${runId}`);
     const promotedAt = new Date().toISOString();

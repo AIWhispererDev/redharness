@@ -384,6 +384,10 @@ export class HarnessService {
     return this.catalog.promoteBaseline(name, runId);
   }
 
+  async getBaseline(name: string) {
+    return this.catalog.getBaseline(name);
+  }
+
   async listBaselines() {
     return this.catalog.listBaselines();
   }
