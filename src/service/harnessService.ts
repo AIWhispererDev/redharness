@@ -80,6 +80,11 @@ export class HarnessService {
     return this.agentRunService;
   }
 
+  /** Get the catalog instance for direct queries. */
+  getCatalog(): RunCatalog {
+    return this.catalog;
+  }
+
   // ---------------------------------------------------------------------------
   // List operations
   // ---------------------------------------------------------------------------
@@ -369,6 +374,10 @@ export class HarnessService {
       return { comparison: null, error: 'Cannot compare runs from different packs' };
     }
 
+    // Load canonical findings from catalog for comparison
+    const baselineFindings = await this.catalog.queryFindings({ runId: baselineRunId });
+    const candidateFindings = await this.catalog.queryFindings({ runId: candidateRunId });
+
     // Build candidate result from manifest
     const { compareRuns: compareFn } = await import('../experiments/comparison.js');
     const candidateResult = {
@@ -381,15 +390,7 @@ export class HarnessService {
         scenarioId: sr.suiteId,
         status: sr.status,
         metrics: [] as import('../experiments/experimentTypes.js').MetricValue[],
-        findings: sr.status === 'failed' || sr.status === 'error'
-          ? [{
-              id: sr.suiteId,
-              severity: (sr.error?.message?.toLowerCase().includes('security')
-                ? 'high'
-                : 'medium') as 'high' | 'medium',
-              title: sr.title,
-            }]
-          : [],
+        findings: getFindingsForSuite(candidateFindings, sr.suiteId),
         tags: registry.get(sr.suiteId)?.tags ?? [],
       })),
     };
@@ -404,15 +405,7 @@ export class HarnessService {
         scenarioId: sr.suiteId,
         status: sr.status,
         metrics: [] as import('../experiments/experimentTypes.js').MetricValue[],
-        findings: sr.status === 'failed' || sr.status === 'error'
-          ? [{
-              id: sr.suiteId,
-              severity: (sr.error?.message?.toLowerCase().includes('security')
-                ? 'high'
-                : 'medium') as 'high' | 'medium',
-              title: sr.title,
-            }]
-          : [],
+        findings: getFindingsForSuite(baselineFindings, sr.suiteId),
         tags: registry.get(sr.suiteId)?.tags ?? [],
       })),
     };
@@ -441,16 +434,38 @@ export class HarnessService {
     return this.catalog.rebuild(this.options.runsBaseDir);
   }
 
+  /** Get the current schema version. */
+  async getSchemaVersion(): Promise<string[]> {
+    return this.catalog.getSchemaVersion();
+  }
+
   // ---------------------------------------------------------------------------
   // Findings
   // ---------------------------------------------------------------------------
 
-  /** List findings from a run. */
+  /**
+   * List findings from a run using canonical indexed records.
+   *
+   * When the catalog has indexed finding packets, returns those.
+   * Falls back to inferring findings from failed suites when the
+   * catalog has not yet indexed findings for this run.
+   */
   async listFindings(runId: string): Promise<Array<{ findingId: string; title: string; severity: string; lifecycleState: string }>> {
+    // Try canonical findings first
+    const canonical = await this.catalog.queryFindings({ runId, limit: 100 });
+    if (canonical.length > 0) {
+      return canonical.map((f) => ({
+        findingId: f.findingId,
+        title: f.title,
+        severity: f.severity,
+        lifecycleState: f.lifecycleState,
+      }));
+    }
+
+    // Fall back to status-based inference for backward compatibility
     const { entry } = await this.getRun(runId);
     if (!entry) return [];
 
-    // In the initial release, findings are extracted from failed suites
     const manifest = await loadManifest(entry.runDir);
     if (!manifest) return [];
 
@@ -464,8 +479,18 @@ export class HarnessService {
       }));
   }
 
-  /** Get a specific finding. */
+  /**
+   * Get a single finding by ID.
+   *
+   * First attempts canonical lookup from the catalog.
+   * Falls back to manifest-based lookup for backward compatibility.
+   */
   async getFinding(findingId: string): Promise<Record<string, unknown> | null> {
+    // Try canonical finding lookup first
+    const canonical = await this.catalog.getFinding(findingId);
+    if (canonical) return canonical;
+
+    // Fall back to legacy lookup
     const parts = findingId.split('/');
     if (parts.length !== 2) return null;
 
@@ -519,4 +544,31 @@ export class HarnessService {
     const { generateSarifReport } = await import('../reporters/sarif.js');
     return generateSarifReport(manifest, entry.runDir) as unknown as Record<string, unknown>;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Get canonical findings for a suite from the catalog query results.
+ */
+function getFindingsForSuite(
+  findings: Array<{ findingId: string; title: string; severity: string; lifecycleState: string; originatingSuiteId?: string }>,
+  suiteId: string,
+): Array<{ id: string; severity: 'high' | 'medium' | 'low'; title?: string }> {
+  return findings
+    .filter((f) => f.originatingSuiteId === suiteId)
+    .map((f) => ({
+      id: f.findingId,
+      severity: mapSeverity(f.severity),
+      title: f.title,
+    }));
+}
+
+function mapSeverity(severity: string): 'high' | 'medium' | 'low' {
+  const s = severity.toLowerCase();
+  if (s === 'high' || s === 'critical') return 'high';
+  if (s === 'low' || s === 'info') return 'low';
+  return 'medium';
 }

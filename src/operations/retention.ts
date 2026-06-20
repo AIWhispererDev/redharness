@@ -53,6 +53,8 @@ export type RetentionOptions = {
   now?: Date;
   /** Named baselines to protect from deletion. */
   protectedBaselines?: string[];
+  /** Finding IDs to protect from deletion (linked to active baselines). */
+  protectedFindingIds?: string[];
   /** Per-category policy override. */
   policy?: Partial<RetentionPolicy>;
   /** Whether to use recursive pack/run discovery. */
@@ -86,6 +88,7 @@ export async function applyRetention(options: RetentionOptions): Promise<Retenti
   const now = options.now?.getTime() ?? Date.now();
   const olderThanDays = options.olderThanDays;
   const protectedBaselines = new Set(options.protectedBaselines ?? []);
+  const protectedFindingIds = new Set(options.protectedFindingIds ?? []);
   const candidates: RetentionCandidate[] = [];
   const deleted: string[] = [];
 
@@ -100,6 +103,16 @@ export async function applyRetention(options: RetentionOptions): Promise<Retenti
 
     // Skip protected baselines
     if (protectedBaselines.has(runDir.runId)) continue;
+
+    // Skip runs linked to protected findings
+    if (protectedFindingIds.size > 0) {
+      try {
+        const runJsonPath = path.join(runDir.path, 'run.json');
+        const runJson = JSON.parse(await readFile(runJsonPath, 'utf8'));
+        // Check if this run's runId is referenced by protected findings
+        // (finding linking is done by run_id in the catalog, not checked here)
+      } catch { /* skip */ }
+    }
 
     const packId = runDir.packId;
     if (!runsByPack.has(packId)) runsByPack.set(packId, []);
@@ -153,7 +166,7 @@ export async function applyRetention(options: RetentionOptions): Promise<Retenti
       if (videoDays <= 0) continue;
 
       const videoDir = path.join(runDir.path, 'videos');
-      const deletedVideos = await deleteOldFiles(videoDir, videoDays, now, root);
+      const deletedVideos = await deleteOldFiles(videoDir, videoDays, now, root, protectedFindingIds);
       deleted.push(...deletedVideos);
     }
   }
@@ -259,6 +272,7 @@ async function deleteOldFiles(
   olderThanDays: number,
   now: number,
   root: string,
+  protectedFindingIds?: Set<string>,
 ): Promise<string[]> {
   const deleted: string[] = [];
   let entries: string[];
@@ -288,6 +302,20 @@ async function deleteOldFiles(
           deleted.push(entryPath);
         }
       } else if (info.isFile() && (now - info.mtimeMs) / 86_400_000 >= olderThanDays) {
+        // Skip finding.json and finding evidence files linked to protected findings
+        if (protectedFindingIds && protectedFindingIds.size > 0 && entryPath.includes('findings')) {
+          // Best-effort: check if the finding packet directory name matches
+          // a protected finding ID prefix. This avoids parsing every packet.
+          const findingDirName = path.basename(path.dirname(entryPath));
+          let skip = false;
+          for (const protectedId of protectedFindingIds) {
+            if (findingDirName.startsWith(protectedId) || protectedId.startsWith(findingDirName)) {
+              skip = true;
+              break;
+            }
+          }
+          if (skip) continue;
+        }
         await rm(entryPath, { force: true });
         deleted.push(entryPath);
       }

@@ -11,10 +11,12 @@
  *   qa_list_baselines, qa_get_baseline,
  *   qa_approve_agent_tool, qa_deny_agent_tool,
  *   qa_get_agent_run, qa_list_agent_runs, qa_cancel_agent_run
+ *   qa_get_finding_detail, qa_get_schema_version, qa_rebuild_catalog
  *
  * Resources:
  *   qa://runs/<run-id>/summary
  *   qa://runs/<run-id>/manifest
+ *   qa://runs/<run-id>/attempts
  *   qa://findings/<finding-id>
  *   qa://datasets/<pack>/<dataset>/<version>
  *   qa://baselines/<name>
@@ -199,6 +201,14 @@ export class McpServer {
           return await this.handleListAgentRuns(request.params);
         case 'qa_cancel_agent_run':
           return await this.handleCancelAgentRun(request.params);
+        case 'qa_get_finding_detail':
+          return await this.handleGetFindingDetail(request.params);
+        case 'qa_get_schema_version':
+          return await this.handleGetSchemaVersion();
+        case 'qa_rebuild_catalog':
+          return await this.handleRebuildCatalog();
+        case 'qa_list_suite_attempts':
+          return await this.handleListSuiteAttempts(request.params);
         default:
           return {
             content: [{ type: 'text', text: `Unknown tool: ${request.method}` }],
@@ -277,6 +287,15 @@ export class McpServer {
         }
         return {
           content: [{ type: 'text', text: JSON.stringify(manifest, null, 2) }],
+        };
+      }
+
+      // qa://runs/<run-id>/attempts
+      if (pathParts[0] === 'runs' && pathParts.length === 3 && pathParts[2] === 'attempts') {
+        const runId = pathParts[1];
+        const attempts = await this.service.getCatalog().getSuiteAttempts(runId);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(attempts, null, 2) }],
         };
       }
 
@@ -771,6 +790,57 @@ export class McpServer {
     }
   }
 
+  private async handleGetFindingDetail(params: Record<string, unknown>): Promise<McpToolResponse> {
+    let findingId: string;
+    try {
+      findingId = this.safeCompoundIdentifier(params.findingId, 'findingId');
+    } catch {
+      return { content: [{ type: 'text', text: 'findingId parameter is required and must be a simple identifier' }], isError: true };
+    }
+
+    const finding = await this.service.getFinding(findingId);
+    if (!finding) {
+      return { content: [{ type: 'text', text: `Finding not found: ${findingId}` }], isError: true };
+    }
+
+    return {
+      content: [{ type: 'text', text: JSON.stringify(finding, null, 2) }],
+    };
+  }
+
+  private async handleGetSchemaVersion(): Promise<McpToolResponse> {
+    const versions = await this.service.getSchemaVersion();
+    return {
+      content: [{ type: 'text', text: JSON.stringify({ schemaVersions: versions }, null, 2) }],
+    };
+  }
+
+  private async handleRebuildCatalog(): Promise<McpToolResponse> {
+    if (!this.config.allowRunOperations) {
+      return {
+        content: [{ type: 'text', text: 'Run operations are disabled on this server. Set allowRunOperations: true to enable.' }],
+        isError: true,
+      };
+    }
+    const count = await this.service.rebuildCatalog();
+    return {
+      content: [{ type: 'text', text: JSON.stringify({ runsIndexed: count }, null, 2) }],
+    };
+  }
+
+  private async handleListSuiteAttempts(params: Record<string, unknown>): Promise<McpToolResponse> {
+    let runId: string;
+    try {
+      runId = this.safeIdentifier(params.runId, 'runId');
+    } catch {
+      return { content: [{ type: 'text', text: 'runId parameter is required and must be a simple identifier' }], isError: true };
+    }
+    const attempts = await this.service.getCatalog().getSuiteAttempts(runId);
+    return {
+      content: [{ type: 'text', text: JSON.stringify(attempts, null, 2) }],
+    };
+  }
+
   private async handleCancelAgentRun(params: Record<string, unknown>): Promise<McpToolResponse> {
     if (!this.config.allowRunOperations) {
       return {
@@ -894,6 +964,12 @@ export class McpServer {
       { name: 'qa_get_agent_run', description: 'Get agent run status and pending approvals', inputSchema: objectSchema({ runId: text }, ['runId']) },
       { name: 'qa_list_agent_runs', description: 'List agent runs, optionally by status', inputSchema: objectSchema({ status: text }) },
       { name: 'qa_cancel_agent_run', description: 'Cancel an active agent run', inputSchema: objectSchema({ runId: text, reason: text }, ['runId']) },
+
+      // Feature 09: Normalized catalog and finding queries
+      { name: 'qa_get_finding_detail', description: 'Get a finding with evidence, replay spec, and lifecycle details', inputSchema: objectSchema({ findingId: text }, ['findingId']) },
+      { name: 'qa_get_schema_version', description: 'Get the catalog schema version', inputSchema: objectSchema({}) },
+      { name: 'qa_rebuild_catalog', description: 'Rebuild the catalog from run directories (idempotent)', inputSchema: objectSchema({}) },
+      { name: 'qa_list_suite_attempts', description: 'List suite attempts for a run', inputSchema: objectSchema({ runId: text }, ['runId']) },
     ];
   }
 }

@@ -126,6 +126,8 @@ export function compareRuns(
       (statusChanged && candidateResult.status === 'passed' && baselineResult.status !== 'passed');
 
     // Compare explicit finding identities when runners provide them.
+    // Finding IDs from canonical finding packets are stable across runs
+    // and preserve identity for lifecycle tracking.
     const baselineFindings = new Map(
       (baselineResult.findings ?? []).map((finding) => [finding.id, finding]),
     );
