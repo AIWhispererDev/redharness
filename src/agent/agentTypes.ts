@@ -6,6 +6,8 @@
  */
 
 import type { ExecutionStatus } from '../core/status.js';
+import type { TraceWriter } from '../trace/traceWriter.js';
+import type { ArtifactStore } from '../artifacts/artifactStore.js';
 
 // ---------------------------------------------------------------------------
 // Model configuration
@@ -171,6 +173,10 @@ export type ToolExecutionContext = {
   abortSignal: AbortSignal;
   /** Controlled fixture endpoint for fixture-only tools. */
   fixtureBaseUrl?: string;
+  /** Tool execution span ID for trace correlation. */
+  toolSpanId?: string;
+  /** Policy check span ID for trace correlation. */
+  policySpanId?: string;
 };
 
 export type ToolResult = {
@@ -215,6 +221,16 @@ export type AgentRunResult = {
   durationMs: number;
   error?: string;
   checkpointId?: string;
+  /** Trace ID for correlation with harness traces. */
+  traceId?: string;
+  /** Invocation span ID for navigation. */
+  invokeSpanId?: string;
+  /** Evidence manifest reference for finding linkage. */
+  evidenceManifestRef?: {
+    traceId: string;
+    attemptId: string;
+    artifactCount: number;
+  };
 };
 
 // ---------------------------------------------------------------------------
@@ -245,6 +261,12 @@ export type Checkpoint = {
   toolVersions: Record<string, string>;
   datasetVersion?: string;
   createdAt: string;
+  /** Trace cursor for resuming trace parentage after checkpoint restore. */
+  traceCursor?: {
+    traceId: string;
+    invokeSpanId: string;
+    lastTurn: number;
+  };
 };
 
 // ---------------------------------------------------------------------------

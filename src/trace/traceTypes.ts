@@ -24,7 +24,11 @@ export type SpanKind =
   | 'tool.execute'
   | 'grader.score'
   | 'artifact.write'
-  | 'policy.check';
+  | 'policy.check'
+  | 'policy.approval'
+  | 'checkpoint.save'
+  | 'checkpoint.load'
+  | 'cleanup';
 
 /** A single event within a span (e.g. a sub-step or state change). */
 export type TraceEvent = {
