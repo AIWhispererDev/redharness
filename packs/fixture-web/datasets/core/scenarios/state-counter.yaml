@@ -1,0 +1,20 @@
+id: state-counter
+version: 1
+title: State counter increments correctly
+tags: [smoke, api]
+target:
+  kind: fixture
+  route: /api/counter
+actor:
+  kind: scripted
+steps:
+  - action: goto
+    url: /api/increment
+  - action: goto
+    url: /api/increment
+expected:
+  - assertion: state_equals
+    path: counter
+    expected: 2
+cleanup:
+  strategy: reset-session

@@ -1,0 +1,26 @@
+id: core
+version: 1.0.0
+description: Core fixture scenarios for release gating
+contentHash: 2fa0645a10f785f62fedda340f1f7e0b
+splits:
+  smoke:
+    - public-landing
+    - auth-gate
+    - form-validation
+    - api-users
+    - state-counter
+    - about-page
+  release:
+    - public-landing
+    - auth-gate
+    - form-validation
+    - api-users
+    - state-counter
+    - about-page
+    - state-diff-example
+    - multi-trial-counter
+  exploratory:
+    - not-found
+provenance:
+  owner: qa
+  createdFrom: manual

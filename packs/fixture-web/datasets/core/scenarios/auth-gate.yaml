@@ -1,0 +1,22 @@
+id: auth-gate
+version: 1
+title: Protected route shows sign-in when unauthenticated
+tags: [smoke, security]
+target:
+  kind: fixture
+  route: /dashboard
+actor:
+  kind: scripted
+steps:
+  - action: goto
+    url: /dashboard
+  - action: capture
+    as: dashboard_text
+    selector: /dashboard
+expected:
+  - assertion: text_present
+    text: Sign In Required
+  - assertion: text_present
+    text: Please sign in
+cleanup:
+  strategy: none

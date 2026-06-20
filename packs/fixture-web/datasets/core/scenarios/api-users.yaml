@@ -1,0 +1,19 @@
+id: api-users
+version: 1
+title: API returns user list and individual users
+tags: [smoke, api]
+target:
+  kind: fixture
+  route: /api/users
+actor:
+  kind: scripted
+steps:
+  - action: goto
+    url: /api/users
+  - action: goto
+    url: /api/users/user-1
+expected:
+  - assertion: url_matches
+    pattern: /api/users/user-1
+cleanup:
+  strategy: none

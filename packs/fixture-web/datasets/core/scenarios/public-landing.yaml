@@ -1,0 +1,22 @@
+id: public-landing
+version: 1
+title: Public landing page loads and shows expected content
+tags: [smoke, public]
+target:
+  kind: fixture
+  route: /
+actor:
+  kind: scripted
+steps:
+  - action: goto
+    url: /
+  - action: capture
+    as: page_text
+    selector: /
+expected:
+  - assertion: text_present
+    text: Welcome to Fixture Web
+  - assertion: url_matches
+    pattern: /
+cleanup:
+  strategy: none

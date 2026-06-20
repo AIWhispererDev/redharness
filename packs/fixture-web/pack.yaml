@@ -1,0 +1,4 @@
+id: fixture-web
+name: Fixture Web
+type: fixture
+baseUrl: http://127.0.0.1:0

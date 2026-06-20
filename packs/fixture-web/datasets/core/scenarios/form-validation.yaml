@@ -1,0 +1,17 @@
+id: form-validation
+version: 1
+title: Form rejects empty submission with validation error
+tags: [smoke]
+target:
+  kind: fixture
+  route: /submit
+actor:
+  kind: scripted
+steps:
+  - action: goto
+    url: /form
+expected:
+  - assertion: text_present
+    text: Contact Form
+cleanup:
+  strategy: reset-session

@@ -1,0 +1,25 @@
+id: state-diff-example
+version: 1
+title: State-diff grading tracks counter mutation
+tags: [api, grading]
+target:
+  kind: fixture
+  route: /api/increment
+graders:
+  - id: state-diff
+    type: state-diff
+actor:
+  kind: scripted
+steps:
+  - action: goto
+    url: /api/increment
+  - action: goto
+    url: /api/increment
+  - action: goto
+    url: /api/increment
+expected:
+  - assertion: state_equals
+    path: counter
+    expected: 3
+cleanup:
+  strategy: reset-session

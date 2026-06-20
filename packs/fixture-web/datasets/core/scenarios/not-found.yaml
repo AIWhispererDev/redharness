@@ -1,0 +1,20 @@
+id: not-found
+version: 1
+title: Unknown route returns 404
+tags: [exploratory]
+target:
+  kind: fixture
+  route: /nonexistent
+actor:
+  kind: scripted
+steps:
+  - action: goto
+    url: /nonexistent
+  - action: capture
+    as: not_found_text
+    selector: /nonexistent
+expected:
+  - assertion: text_present
+    text: 404 Not Found
+cleanup:
+  strategy: none

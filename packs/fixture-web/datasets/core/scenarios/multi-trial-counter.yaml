@@ -1,0 +1,23 @@
+id: multi-trial-counter
+version: 1
+title: Counter increments over multiple trials for pass@k reliability metrics
+tags: [smoke, api, reliability]
+target:
+  kind: fixture
+  route: /api/counter
+trials: 5
+actor:
+  kind: scripted
+steps:
+  - action: goto
+    url: /api/increment
+  - action: goto
+    url: /api/increment
+  - action: goto
+    url: /api/counter
+expected:
+  - assertion: state_equals
+    path: counter
+    expected: 1
+cleanup:
+  strategy: reset-session

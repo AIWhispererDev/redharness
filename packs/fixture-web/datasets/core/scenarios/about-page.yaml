@@ -1,0 +1,22 @@
+id: about-page
+version: 1
+title: About page shows fixture version
+tags: [smoke]
+target:
+  kind: fixture
+  route: /about
+actor:
+  kind: scripted
+steps:
+  - action: goto
+    url: /about
+  - action: capture
+    as: about_text
+    selector: /about
+expected:
+  - assertion: text_present
+    text: About Fixture Web
+  - assertion: text_present
+    text: version 1
+cleanup:
+  strategy: none
