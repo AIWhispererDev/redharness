@@ -64,6 +64,10 @@ export type SuiteContext = {
   /** Correlation identifiers for trace and evidence writers. */
   traceId?: string;
   spanId?: string;
+  /** Attempt-scoped ID for evidence tracking. */
+  attemptId?: string;
+  /** Attempt-scoped artifact store for evidence persistence. */
+  artifactStore?: import('../artifacts/artifactStore.js').ArtifactStore;
 };
 
 /** Suite definition registered in the registry. */

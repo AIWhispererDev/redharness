@@ -16,6 +16,7 @@ import { evaluateRunPolicy } from './resultPolicy.js';
 import { isRetryable } from './resultPolicy.js';
 import { saveManifest, computeConfigHash } from './resumeStore.js';
 import { TraceWriter } from '../trace/traceWriter.js';
+import { ArtifactStore } from '../artifacts/artifactStore.js';
 
 export type CoordinatorOptions = {
   packDir: string;
@@ -324,12 +325,16 @@ export class RunCoordinator {
         | { kind: 'timeout' }
         | { kind: 'cancelled' };
 
+      const attemptId = `${suite.id}:${results.length + 1}`;
+      const artifactStore = new ArtifactStore(this.runDir, this.manifest.runId);
       const suiteContext: SuiteContext = {
         ...this.context,
         outputDir: path.join(this.runDir, 'suites', suite.id, 'attempts'),
         abortSignal: ac.signal,
         traceId: this.traceWriter.getTraceId(),
         spanId: suiteSpanId,
+        attemptId,
+        artifactStore,
       };
       const runPromise: Promise<Outcome> = this.executeSuite(
         suite,
@@ -483,11 +488,24 @@ export class RunCoordinator {
     // Each attempt gets a numbered subdirectory for artifact isolation
     const attemptDir = (attemptNum: number) =>
       path.join(baseCtx.outputDir ?? this.runDir, `attempt-${attemptNum}`);
+    // Create attempt-scoped artifact store for this suite execution
+    const store = baseCtx.artifactStore ?? new ArtifactStore(this.runDir, this.manifest.runId);
+    const attemptId = baseCtx.attemptId ?? `${suite.id}:1`;
+
+    /** Persist attempt evidence and flush trace. */
+    const persistEvidence = async (): Promise<void> => {
+      await this.traceWriter.flush();
+      const manifest = store.buildManifest({ attemptId, traceId: this.traceWriter.getTraceId() });
+      if (manifest.artifacts.length > 0) {
+        await store.saveManifest(attemptId, this.traceWriter.getTraceId());
+      }
+    };
+
     try {
       if (baseCtx.abortSignal?.aborted) {
         throw new DOMException('Suite cancelled before execution', 'AbortError');
       }
-      const attemptCtx: SuiteContext = { ...baseCtx, outputDir: attemptDir(1) };
+      const attemptCtx: SuiteContext = { ...baseCtx, outputDir: attemptDir(1), artifactStore: store, attemptId };
       suiteResult = await suite.run(attemptCtx);
     } catch (error) {
       suiteResult = {
@@ -503,6 +521,7 @@ export class RunCoordinator {
         error: { message: String(error instanceof Error ? error.message : error) },
       };
     }
+    await persistEvidence();
     allAttempts.push(suiteResult);
 
     // Retry attempts for error/cancelled — each with its own artifact directory
@@ -513,7 +532,9 @@ export class RunCoordinator {
       !baseCtx.abortSignal?.aborted
     ) {
       attempts++;
-      const retryCtx: SuiteContext = { ...baseCtx, outputDir: attemptDir(attempts) };
+      const retryAttemptId = `${suite.id}:attempt-${attempts}`;
+      const retryStore = new ArtifactStore(this.runDir, this.manifest.runId);
+      const retryCtx: SuiteContext = { ...baseCtx, outputDir: attemptDir(attempts), artifactStore: retryStore, attemptId: retryAttemptId };
       try {
         suiteResult = await suite.run(retryCtx);
       } catch (error) {
