@@ -13,11 +13,11 @@ playwright-report/
 .auth/
 *.storage-state.json
 
-# Generated QA output
-artifacts/
-runs/
-drafts/
-reports/
+# Generated QA output (root only — never ignore src/artifacts/)
+/artifacts/
+/runs/
+/drafts/
+/reports/
 
 # Local environment and secrets
 .env
