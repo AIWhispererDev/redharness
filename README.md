@@ -32,8 +32,9 @@ npm test
 Current verified test count at time of writing:
 
 ```text
-23 test files
-44 tests
+30+ test files
+118+ tests
+31 test files, 118 tests
 ```
 
 ---
@@ -477,20 +478,35 @@ Product/spec docs live in:
 
 ```text
 docs/prd/
+  agentic-harness-01-run-contract-suite-registry.md
+  agentic-harness-02-trace-evidence-replay.md
+  agentic-harness-03-scenarios-datasets-graders.md
+  agentic-harness-04-agent-runtime-safety.md
+  agentic-harness-05-agentic-security-red-team.md
+  agentic-harness-06-experiments-ci-monitoring-mcp.md
+  agentic-harness-07-repository-integrity-release-baseline.md
+  agentic-harness-08-evidence-trace-replay-integration.md
+  agentic-harness-09-fixtures-datasets-graders.md
+  agentic-harness-10-agent-redteam-e2e.md
+  agentic-harness-11-ci-store-mcp-operations.md
+  agentic-harness-remaining-implementation-plan.md
+  agentic-harness-2026-research-roadmap.md
   hackzero-style-qa-security-platform.md
   security-smoke-implementation-spec.md
   blackbox-whitebox-pentest-spec.md
 ```
 
-These describe the HackZero-style direction:
+The remaining implementation plan and PRDs 07-11 define the ordered work required to make the current agentic harness reproducible, integrated, and release-ready.
+
+The HackZero-style documents describe:
 
 - blackbox pentest
 - whitebox pentest
 - confirmed replay
 - finding packets
 - exact request artifacts
-- future AI red-team mode
-- future MCP server
+- AI red-team direction
+- MCP integration direction
 - future fix-as-PR mode
 
 ---
@@ -582,14 +598,47 @@ Minor UX/form validation
 
 ---
 
-## Still missing / next high-value work
+## Release Status
+
+The core harness is in an active development state with the following baseline:
+
+```text
+TypeScript: 116 files, 0 errors
+Tests:      31 files, 118 tests passed
+Suites:     18 registered suites
+```
+
+### Delivered (PRDs 01-06)
+
+- Truthful execution statuses and suite registry
+- Run coordination, retries, cancellation, resume, and trace spans
+- Scenario and dataset schemas
+- Deterministic graders and reliability helpers
+- Bounded agent runtime primitives (policy engine, budgets, checkpoints, approvals)
+- OWASP-aligned red-team definitions (attack mutations, canaries, harm endpoints)
+- Experiments, comparison, gates
+- Reporters (JUnit, SARIF, GitHub)
+- OTel export
+- Service API and MCP protocol handling
+
+### In progress (PRDs 07-11)
+
+The [remaining implementation plan](docs/prd/agentic-harness-remaining-implementation-plan.md) defines the ordered delivery:
+
+1. **Repository Integrity & Release Baseline** — Fix ignored sources, commit all files, CI, empty-run policy
+2. **Evidence, Trace & Replay Integration** — Real suites emit scoped evidence and executable replay
+3. **Fixtures, Datasets & Graders** — Controlled fixtures, versioned datasets, state/trajectory grading
+4. **Agent Runtime & Red-Team E2E** — Policy-controlled agents against fixtures
+5. **CI, Result Store, MCP & Operations** — SQLite catalog, CI, MCP client access
+
+### Still missing / next high-value work
 
 1. Screen recording per finding (`video.webm`).
-2. Real replay implementation in `replay.pw.ts` instead of scaffold.
+2. Real replay execution in `replay.pw.ts` instead of scaffold.
 3. Exact request capture for browser/API flows beyond simple GET routes.
 4. AI red-team mode for prompt-injection/system-prompt/data-leak probes.
 5. True whitebox mode against the actual target app source repo.
 6. Fix-as-PR mode for owned repos.
-7. MCP server interface so Hermes/Cursor/Claude Code can launch pentests and pull findings.
+7. MCP server interface for external AI tools.
 8. Scheduled recurring runs / continuous QA.
 9. Compliance mapping to SOC 2 / HIPAA / PCI / ISO controls.
