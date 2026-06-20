@@ -258,6 +258,149 @@ if (hasSqlite) {
         expect(response.isError).toBe(true);
       }
     });
+
+    it('rejects attacks through all identifier surfaces', async () => {
+      const server = new McpServer();
+
+      // Finding ID (compound) traversal
+      const findingResp = await server.handleTool({
+        method: 'qa_get_finding',
+        params: { findingId: '../../etc/shadow' },
+      });
+      expect(findingResp.isError).toBe(true);
+
+      // Baseline name traversal
+      const baselineResp = await server.handleTool({
+        method: 'qa_get_baseline',
+        params: { name: '../../etc/passwd' },
+      });
+      expect(baselineResp.isError).toBe(true);
+
+      // Compare traversal through baseline parameter
+      const compare1 = await server.handleTool({
+        method: 'qa_compare_runs',
+        params: { baseline: '../etc/passwd', candidate: 'valid-run' },
+      });
+      expect(compare1.isError).toBe(true);
+
+      const compare2 = await server.handleTool({
+        method: 'qa_compare_runs',
+        params: { baseline: 'valid-run', candidate: '../../../../etc/shadow' },
+      });
+      expect(compare2.isError).toBe(true);
+    });
+  });
+
+  // ───────────────────────────────────────────────────────────────────────
+  // 7. Named baselines
+  // ───────────────────────────────────────────────────────────────────────
+
+  describe('MCP named baselines', () => {
+    it('list_baselines returns empty array when no baselines exist', async () => {
+      const server = new McpServer();
+      const response = await server.handleTool({
+        method: 'qa_list_baselines',
+        params: {},
+      });
+      expect(response.isError).toBeFalsy();
+      const data = JSON.parse(response.content[0].text);
+      expect(Array.isArray(data)).toBe(true);
+    });
+
+    it('get_baseline returns not found for unknown baseline name', async () => {
+      const server = new McpServer();
+      const response = await server.handleTool({
+        method: 'qa_get_baseline',
+        params: { name: 'nonexistent-baseline' },
+      });
+      expect(response.isError).toBe(true);
+      expect(response.content[0].text).toContain('not found');
+    });
+
+    it('get_baseline rejects traversal attacks', async () => {
+      const server = new McpServer();
+      const response = await server.handleTool({
+        method: 'qa_get_baseline',
+        params: { name: '../../../etc/passwd' },
+      });
+      expect(response.isError).toBe(true);
+    });
+
+    it('baseline resource URIs are accessible', async () => {
+      const server = new McpServer();
+      const response = await server.handleResource('qa://baselines/nonexistent');
+      expect(response.isError).toBe(true);
+      expect(response.content[0].text).toContain('not found');
+    });
+  });
+
+  // ───────────────────────────────────────────────────────────────────────
+  // 8. Identifier length limits
+  // ───────────────────────────────────────────────────────────────────────
+
+  describe('MCP identifier length limits', () => {
+    it('rejects excessively long identifiers', async () => {
+      const server = new McpServer();
+      const longId = 'a'.repeat(300);
+      const response = await server.handleTool({
+        method: 'qa_get_run',
+        params: { runId: longId },
+      });
+      expect(response.isError).toBe(true);
+    });
+
+    it('rejects excessively long finding IDs', async () => {
+      const server = new McpServer();
+      const longId = 'a'.repeat(300);
+      const response = await server.handleTool({
+        method: 'qa_get_finding',
+        params: { findingId: longId },
+      });
+      expect(response.isError).toBe(true);
+    });
+
+    it('allows reasonable-length identifiers', async () => {
+      const server = new McpServer();
+      // 256 chars (max allowed) should be accepted syntactically even if not found
+      const longRunId = 'run-' + 'a'.repeat(250);
+      const response = await server.handleTool({
+        method: 'qa_get_run',
+        params: { runId: longRunId },
+      });
+      // Should pass validation and return 'not found' (not a validation error)
+      expect(response.isError).toBe(true);
+      expect(response.content[0].text).toContain('not found');
+    });
+  });
+
+  // ───────────────────────────────────────────────────────────────────────
+  // 9. MCP tool definitions include baseline tools
+  // ───────────────────────────────────────────────────────────────────────
+
+  describe('MCP tool definitions include baselines', () => {
+    it('qa_list_baselines tool is defined', async () => {
+      const server = new McpServer();
+      const response = JSON.parse(await server.handleRequest({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/list',
+        params: {},
+      }));
+
+      const toolNames = response.result.tools.map((t: { name: string }) => t.name);
+      expect(toolNames).toContain('qa_list_baselines');
+      expect(toolNames).toContain('qa_get_baseline');
+    });
+
+    it('qa_list_baselines is a new MCP tool endpoint', async () => {
+      const server = new McpServer();
+      const response = await server.handleTool({
+        method: 'qa_list_baselines',
+        params: {},
+      });
+      expect(response.isError).toBeFalsy();
+      expect(response.content[0].text).toBeDefined();
+    });
   });
 } else {
   describe('MCP hardening (requires Node 22+)', () => {

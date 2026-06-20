@@ -1,13 +1,24 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import { compareRuns, formatComparisonSummary } from '../src/experiments/comparison.js';
 import { evaluateGates } from '../src/experiments/gates.js';
-import { RunCatalog } from '../src/store/catalog.js';
 import { generateJUnitXml } from '../src/reporters/junit.js';
 import { generateSarifReport } from '../src/reporters/sarif.js';
 import { generateGitHubStepSummary, generateGitHubAnnotations } from '../src/reporters/github.js';
 import type { CandidateRunResult, RegressionGate, RunComparison } from '../src/experiments/experimentTypes.js';
 import type { RunManifest } from '../src/core/runTypes.js';
-import { mkdtempSync } from 'node:fs';
+
+const hasSqlite = Number(process.version.slice(1).split('.')[0]) >= 22;
+
+let RunCatalog: any;
+let mkdtempSync: any;
+
+beforeAll(async () => {
+  if (hasSqlite) {
+    const mod = await import('../src/store/catalog.js');
+    RunCatalog = mod.RunCatalog;
+    mkdtempSync = (await import('node:fs')).mkdtempSync;
+  }
+}, 10000);
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { rm } from 'node:fs/promises';
@@ -207,13 +218,14 @@ describe('RegressionGates', () => {
   });
 });
 
-describe('RunCatalog', () => {
-  it('indexes and queries runs', async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), 'qa-catalog-test-'));
-    const catalog = new RunCatalog(tmpDir);
+if (hasSqlite) {
+  describe('RunCatalog', () => {
+    it('indexes and queries runs', async () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'qa-catalog-test-'));
+      const catalog = new RunCatalog(tmpDir);
 
-    try {
-      const manifest: RunManifest = {
+      try {
+        const manifest: RunManifest = {
         schemaVersion: '1',
         runId: 'test-run-001',
         packId: 'test-pack',
@@ -258,6 +270,7 @@ describe('RunCatalog', () => {
     }
   });
 });
+}
 
 describe('JUnit Reporter', () => {
   it('generates valid JUnit XML for passed suites', () => {
