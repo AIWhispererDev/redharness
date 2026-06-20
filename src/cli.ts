@@ -322,6 +322,53 @@ program
   });
 
 // ===========================================================================
+// PRD 11: Release certification command
+// ===========================================================================
+
+program
+  .command('certify')
+  .argument('<pack>', 'pack id to certify against')
+  .argument('<label>', 'certification label (e.g. release-2026-06)')
+  .option('--output-dir <dir>', 'certification evidence output', 'artifacts/release-certification')
+  .option('--base-url <url>', 'target base URL override')
+  .option('--storage-state <file>', 'Playwright storage state for authenticated suites')
+  .option('--repo <dir>', 'repo directory for whitebox pentest')
+  .option('--no-fixture', 'do not start the controlled fixture')
+  .option('--clean-checkout', 'run clean checkout verification (requires git clone)')
+  .option('--ci', 'CI mode')
+  .option('--baseline-name <name>', 'baseline name for promotion')
+  .option('--baseline-run-id <id>', 'baseline run ID for comparison')
+  .option('--profile <name>', 'release profile name', 'release')
+  .description('Run the full release certification process across all gates and produce machine-readable evidence')
+  .action(async (packId, label, options) => {
+    const { runCertification, certificationPassed } = await import('./operations/certification.js');
+    try {
+      const manifest = await runCertification({
+        packId,
+        label,
+        outputDir: options.outputDir,
+        baseUrl: options.baseUrl,
+        storageState: options.storageState,
+        repo: options.repo,
+        startFixture: options.fixture !== false,
+        cleanCheckout: !!options.cleanCheckout,
+        ci: !!options.ci,
+        baselineName: options.baselineName,
+        baselineRunId: options.baselineRunId,
+        releaseProfile: options.profile,
+      });
+      console.log(`Certification: ${manifest.status}`);
+      console.log(`Evidence: ${path.resolve(options.outputDir)}/`);
+      console.log(`JSON: ${path.resolve(options.outputDir, 'certification.json')}`);
+      console.log(`Markdown: ${path.resolve(options.outputDir, 'certification.md')}`);
+      if (!certificationPassed(manifest)) process.exitCode = 1;
+    } catch (error) {
+      console.error(`Certification failed: ${error instanceof Error ? error.message : String(error)}`);
+      process.exitCode = 1;
+    }
+  });
+
+// ===========================================================================
 // PRD 03: Dataset and scenario commands
 // ===========================================================================
 
