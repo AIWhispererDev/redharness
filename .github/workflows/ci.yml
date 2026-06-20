@@ -32,6 +32,17 @@ jobs:
       - name: Run tests
         run: npm test
 
+      - name: Run deterministic release profile
+        run: npm run release:ci
+
+      - name: Upload release profile reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-harness-release-profile
+          path: artifacts/release-profile/fixture-web-release/
+          if-no-files-found: error
+
       - name: Build (source compilation)
         run: npm run build
 
