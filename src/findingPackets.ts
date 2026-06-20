@@ -69,7 +69,7 @@ export async function writeFindingPacket(input: FindingPacketInput): Promise<Fin
     '',
   ].join('\n');
 
-  const replay = `import { test, expect } from '@playwright/test';\n\ntest('${input.finding.title.replace(/'/g, "\\'")}', async ({ page }) => {\n  // TODO: replay the exact finding steps from finding.json.\n  // PRD 02: This file should be replaced by an executable replay spec.\n  expect(true).toBe(true);\n});\n`;
+  const replay = `import { test, expect } from '@playwright/test';\n\ntest('${input.finding.title.replace(/'/g, "\\'")}', async ({ page }) => {\n  test.setTimeout(120000);\n  test.fixme(true, 'Legacy finding — needs automatic replay reconstruction');\n  // TODO: replay the exact finding steps from finding.json.\n});\n`;
 
   await writeFile(markdownPath, md, 'utf8');
   await writeFile(jsonPath, JSON.stringify({ packName: input.packName, ...input.finding }, null, 2), 'utf8');
