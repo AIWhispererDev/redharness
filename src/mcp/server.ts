@@ -8,7 +8,9 @@
  *   qa_list_packs, qa_list_suites, qa_list_datasets,
  *   qa_validate_dataset, qa_start_run, qa_get_run,
  *   qa_cancel_run, qa_compare_runs, qa_list_findings, qa_get_finding,
- *   qa_list_baselines, qa_get_baseline
+ *   qa_list_baselines, qa_get_baseline,
+ *   qa_approve_agent_tool, qa_deny_agent_tool,
+ *   qa_get_agent_run, qa_list_agent_runs, qa_cancel_agent_run
  *
  * Resources:
  *   qa://runs/<run-id>/summary
@@ -187,6 +189,16 @@ export class McpServer {
           return await this.handleListBaselines();
         case 'qa_get_baseline':
           return await this.handleGetBaseline(request.params);
+        case 'qa_approve_agent_tool':
+          return await this.handleApproveAgentTool(request.params);
+        case 'qa_deny_agent_tool':
+          return await this.handleDenyAgentTool(request.params);
+        case 'qa_get_agent_run':
+          return await this.handleGetAgentRun(request.params);
+        case 'qa_list_agent_runs':
+          return await this.handleListAgentRuns(request.params);
+        case 'qa_cancel_agent_run':
+          return await this.handleCancelAgentRun(request.params);
         default:
           return {
             content: [{ type: 'text', text: `Unknown tool: ${request.method}` }],
@@ -639,6 +651,150 @@ export class McpServer {
     };
   }
 
+  // ---------------------------------------------------------------------------
+  // Agent control-plane handlers
+  // ---------------------------------------------------------------------------
+
+  private async handleApproveAgentTool(params: Record<string, unknown>): Promise<McpToolResponse> {
+    if (!this.config.allowRunOperations) {
+      return {
+        content: [{ type: 'text', text: 'Run operations are disabled on this server. Set allowRunOperations: true to enable.' }],
+        isError: true,
+      };
+    }
+
+    try {
+      const approvalId = this.safeIdentifier(params.approvalId, 'approvalId');
+      const runId = this.safeIdentifier(params.runId, 'runId');
+      const actor = String(params.actor ?? 'human');
+      const reason = params.reason ? String(params.reason) : undefined;
+
+      const result = await this.service.approveAgentTool(approvalId, runId, actor as 'human' | 'ai' | 'policy', reason);
+      if (!result.success) {
+        return { content: [{ type: 'text', text: result.error ?? 'Approval failed' }], isError: true };
+      }
+      return { content: [{ type: 'text', text: `Approval ${approvalId} resolved for run ${runId}` }] };
+    } catch (error) {
+      return {
+        content: [{ type: 'text', text: `Error: ${error instanceof Error ? error.message : String(error)}` }],
+        isError: true,
+      };
+    }
+  }
+
+  private async handleDenyAgentTool(params: Record<string, unknown>): Promise<McpToolResponse> {
+    if (!this.config.allowRunOperations) {
+      return {
+        content: [{ type: 'text', text: 'Run operations are disabled on this server. Set allowRunOperations: true to enable.' }],
+        isError: true,
+      };
+    }
+
+    try {
+      const approvalId = this.safeIdentifier(params.approvalId, 'approvalId');
+      const runId = this.safeIdentifier(params.runId, 'runId');
+      const actor = String(params.actor ?? 'human');
+      const reason = params.reason ? String(params.reason) : undefined;
+
+      const result = await this.service.denyAgentTool(approvalId, runId, actor as 'human' | 'ai' | 'policy', reason);
+      if (!result.success) {
+        return { content: [{ type: 'text', text: result.error ?? 'Denial failed' }], isError: true };
+      }
+      return { content: [{ type: 'text', text: `Approval ${approvalId} denied for run ${runId}` }] };
+    } catch (error) {
+      return {
+        content: [{ type: 'text', text: `Error: ${error instanceof Error ? error.message : String(error)}` }],
+        isError: true,
+      };
+    }
+  }
+
+  private async handleGetAgentRun(params: Record<string, unknown>): Promise<McpToolResponse> {
+    try {
+      const runId = this.safeIdentifier(params.runId, 'runId');
+      const { doc, error } = await this.service.getAgentRun(runId);
+      if (!doc || error) {
+        return { content: [{ type: 'text', text: error ?? `Agent run not found: ${runId}` }], isError: true };
+      }
+      const summary = {
+        runId: doc.runId,
+        status: doc.status,
+        previousStatus: doc.previousStatus,
+        agentId: doc.agentState.goal.goalId,
+        turn: doc.agentState.turn,
+        pendingApprovals: doc.pendingApprovals.length,
+        pendingApprovalIds: doc.pendingApprovals.map((a) => ({
+          id: a.id,
+          toolName: a.toolName,
+          risk: a.risk,
+          expiresAt: a.expiresAt,
+          requestedAt: a.requestedAt,
+        })),
+        startedAt: doc.startedAt,
+        updatedAt: doc.updatedAt,
+        endedAt: doc.endedAt,
+        error: doc.error,
+      };
+      return {
+        content: [{ type: 'text', text: JSON.stringify(summary, null, 2) }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: 'text', text: `Error: ${error instanceof Error ? error.message : String(error)}` }],
+        isError: true,
+      };
+    }
+  }
+
+  private async handleListAgentRuns(params: Record<string, unknown>): Promise<McpToolResponse> {
+    try {
+      const status = params.status ? String(params.status) as any : undefined;
+      const runs = await this.service.listAgentRuns(status);
+      const summaries = runs.map((doc) => ({
+        runId: doc.runId,
+        status: doc.status,
+        turn: doc.agentState.turn,
+        pendingApprovals: doc.pendingApprovals.length,
+        startedAt: doc.startedAt,
+        updatedAt: doc.updatedAt,
+        endedAt: doc.endedAt,
+        error: doc.error,
+      }));
+      return {
+        content: [{ type: 'text', text: JSON.stringify(summaries, null, 2) }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: 'text', text: `Error: ${error instanceof Error ? error.message : String(error)}` }],
+        isError: true,
+      };
+    }
+  }
+
+  private async handleCancelAgentRun(params: Record<string, unknown>): Promise<McpToolResponse> {
+    if (!this.config.allowRunOperations) {
+      return {
+        content: [{ type: 'text', text: 'Run operations are disabled on this server. Set allowRunOperations: true to enable.' }],
+        isError: true,
+      };
+    }
+
+    try {
+      const runId = this.safeIdentifier(params.runId, 'runId');
+      const reason = params.reason ? String(params.reason) : undefined;
+      const result = await this.service.cancelAgentRun(runId, reason);
+      if (!result.success) {
+        return { content: [{ type: 'text', text: result.error ?? 'Cancel failed' }], isError: true };
+      }
+      return { content: [{ type: 'text', text: `Agent run ${runId} cancelled` }] };
+    } catch (error) {
+      return {
+        content: [{ type: 'text', text: `Error: ${error instanceof Error ? error.message : String(error)}` }],
+        isError: true,
+      };
+    }
+  }
+
   /**
    * Handle an MCP JSON-RPC request.
    * This is the entry point for stdio/HTTP transport.
@@ -731,6 +887,13 @@ export class McpServer {
       { name: 'qa_get_finding', description: 'Get one finding', inputSchema: objectSchema({ findingId: text }, ['findingId']) },
       { name: 'qa_list_baselines', description: 'List all named baselines', inputSchema: objectSchema({}) },
       { name: 'qa_get_baseline', description: 'Resolve a named baseline to its run ID', inputSchema: objectSchema({ name: text }, ['name']) },
+
+      // Feature 04: Agent control-plane tools
+      { name: 'qa_approve_agent_tool', description: 'Approve a pending agent tool call', inputSchema: objectSchema({ approvalId: text, runId: text, actor: text, reason: text }, ['approvalId', 'runId']) },
+      { name: 'qa_deny_agent_tool', description: 'Deny a pending agent tool call', inputSchema: objectSchema({ approvalId: text, runId: text, actor: text, reason: text }, ['approvalId', 'runId']) },
+      { name: 'qa_get_agent_run', description: 'Get agent run status and pending approvals', inputSchema: objectSchema({ runId: text }, ['runId']) },
+      { name: 'qa_list_agent_runs', description: 'List agent runs, optionally by status', inputSchema: objectSchema({ status: text }) },
+      { name: 'qa_cancel_agent_run', description: 'Cancel an active agent run', inputSchema: objectSchema({ runId: text, reason: text }, ['runId']) },
     ];
   }
 }

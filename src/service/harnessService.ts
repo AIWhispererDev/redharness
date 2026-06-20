@@ -16,6 +16,8 @@ import { registry } from '../core/suiteRegistry.js';
 import { RunCoordinator } from '../core/runCoordinator.js';
 import { loadManifest, computeConfigHash } from '../core/resumeStore.js';
 import { RunCatalog } from '../store/catalog.js';
+import { AgentRunService } from './agentRunService.js';
+import type { AgentRunDocument, AgentRunStatus, ApprovalBinding, VersionedMetadata } from '../agent/runStateStore.js';
 import type { RunManifest, SuiteDefinition, RunSelection } from '../core/runTypes.js';
 import type { ExecutionStatus } from '../core/status.js';
 import type { PackInfo, ServiceError } from './serviceTypes.js';
@@ -60,6 +62,8 @@ export class HarnessService {
   private catalog: RunCatalog;
   /** Tracks active coordinators for cancellation. */
   private runningCoordinators: Map<string, RunCoordinator> = new Map();
+  /** Agent run service for durable agent control plane. */
+  private agentRunService: AgentRunService;
 
   constructor(options: ServiceOptions = {}) {
     this.options = {
@@ -68,6 +72,12 @@ export class HarnessService {
       catalogBaseDir: options.catalogBaseDir ?? process.cwd(),
     };
     this.catalog = new RunCatalog(this.options.catalogBaseDir);
+    this.agentRunService = new AgentRunService({ runsBaseDir: this.options.runsBaseDir });
+  }
+
+  /** Get the agent run service for control-plane operations. */
+  getAgentRunService(): AgentRunService {
+    return this.agentRunService;
   }
 
   // ---------------------------------------------------------------------------
@@ -271,6 +281,41 @@ export class HarnessService {
     }
 
     return { manifest, entry };
+  }
+
+  /** Approve a pending agent tool call. */
+  async approveAgentTool(
+    approvalId: string,
+    runId: string,
+    actor: 'human' | 'ai' | 'policy' = 'human',
+    reason?: string,
+  ): Promise<{ success: boolean; error?: string }> {
+    return this.agentRunService.approveTool({ approvalId, runId, actor, reason });
+  }
+
+  /** Deny a pending agent tool call. */
+  async denyAgentTool(
+    approvalId: string,
+    runId: string,
+    actor: 'human' | 'ai' | 'policy' = 'human',
+    reason?: string,
+  ): Promise<{ success: boolean; error?: string }> {
+    return this.agentRunService.denyTool({ approvalId, runId, actor, reason });
+  }
+
+  /** Get an agent run by ID. */
+  async getAgentRun(runId: string): Promise<{ doc: AgentRunDocument | null; error?: string }> {
+    return this.agentRunService.getAgentRun(runId);
+  }
+
+  /** List agent runs. */
+  async listAgentRuns(status?: AgentRunStatus): Promise<AgentRunDocument[]> {
+    return this.agentRunService.listAgentRuns(status);
+  }
+
+  /** Cancel an agent run. */
+  async cancelAgentRun(runId: string, reason?: string): Promise<{ success: boolean; error?: string }> {
+    return this.agentRunService.cancelAgentRun(runId, reason);
   }
 
   /** Cancel a run — sends abort signal to active coordinator. */

@@ -13,3 +13,18 @@ export type ServiceError = {
   message: string;
   details?: unknown;
 };
+
+// Feature 04: Agent run control-plane types
+
+export type AgentRunSummary = {
+  runId: string;
+  status: 'running' | 'awaiting-approval' | 'paused' | 'completed' | 'failed' | 'cancelled';
+  previousStatus?: string;
+  agentId: string;
+  turn: number;
+  pendingApprovals: number;
+  startedAt: string;
+  updatedAt: string;
+  endedAt?: string;
+  error?: string;
+};

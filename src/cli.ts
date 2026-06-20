@@ -501,6 +501,7 @@ program
   .option('--provider <name>', 'model provider', 'fake')
   .option('--approval <policy>', 'tool approval policy: auto|deny|require-human')
   .option('--checkpoint-id <id>', 'checkpoint to resume from')
+  .option('--approval-id <id>', 'approval ID for approve/deny')
   .option('--fake-reply <text>', 'red-team fake model reply override')
   .description('Run, resume, approve, or cancel an agentic QA run')
   .action(async (action, packId, options) => {
@@ -650,9 +651,41 @@ program
       console.log(JSON.stringify(result, null, 2));
       if (result.status !== 'passed') process.exitCode = 1;
     } else if (action === 'approve') {
-      console.log(`Approving request for run: ${options.runId ?? '(none)'}`);
+      const { HarnessService } = await import('./service/harnessService.js');
+      const service = new HarnessService();
+      const approvalId = options.approvalId ?? options.runId;
+      if (!approvalId) {
+        console.error('--approval-id or --run-id is required for approve');
+        process.exitCode = 1;
+        return;
+      }
+      if (!options.runId) {
+        console.error('--run-id is required for approve');
+        process.exitCode = 1;
+        return;
+      }
+      const result = await service.approveAgentTool(approvalId, options.runId, options.ai ? 'ai' : 'human');
+      if (result.success) {
+        console.log(`Approved ${approvalId} for run ${options.runId}`);
+      } else {
+        console.error(`Approval failed: ${result.error}`);
+        process.exitCode = 1;
+      }
     } else if (action === 'cancel') {
-      console.log(`Cancelling run: ${options.runId ?? '(none)'}`);
+      const { HarnessService } = await import('./service/harnessService.js');
+      const service = new HarnessService();
+      if (!options.runId) {
+        console.error('--run-id is required for cancel');
+        process.exitCode = 1;
+        return;
+      }
+      const result = await service.cancelAgentRun(options.runId, 'Cancelled via CLI');
+      if (result.success) {
+        console.log(`Cancelled agent run: ${options.runId}`);
+      } else {
+        console.error(`Cancel failed: ${result.error}`);
+        process.exitCode = 1;
+      }
     } else {
       console.error(`Unknown agent action: ${action}. Use: run, resume, approve, cancel`);
       process.exitCode = 1;
