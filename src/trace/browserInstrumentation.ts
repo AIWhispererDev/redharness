@@ -19,6 +19,8 @@ export type BrowserInstrumentationOptions = {
   retainTraceOnSuccess?: boolean;
 };
 
+// Internal flag to prevent duplicate tracing stop calls.
+
 const DEFAULT_OPTIONS: BrowserInstrumentationOptions = {
   captureConsole: true,
   captureNetwork: true,
@@ -35,6 +37,8 @@ export class BrowserInstrumentation {
   private pageErrors: Array<{ message: string; stack?: string }> = [];
   private failedRequests: Array<{ url: string; method: string; error: string }> = [];
   private responseFailures: Array<{ url: string; status: number }> = [];
+  private tracingStopped = false;
+  private contextRef: BrowserContext | null = null;
 
   constructor(
     private traceWriter: TraceWriter,
@@ -55,6 +59,7 @@ export class BrowserInstrumentation {
     this.spanIds.push(spanId);
 
     // Start Playwright built-in tracing
+    this.contextRef = context;
     await context.tracing.start({
       screenshots: this.options.captureScreenshots,
       snapshots: true,
@@ -194,15 +199,15 @@ export class BrowserInstrumentation {
       }
     }
 
-    // Retain Playwright trace.zip on failure
-    if (outcome !== 'passed') {
-      const ctx = (page.context as any)();
-      if (ctx && typeof ctx.tracing?.stop === 'function') {
+    // Retain Playwright trace.zip on failure — ensure stop is called only once
+    if (outcome !== 'passed' && !this.tracingStopped) {
+      this.tracingStopped = true;
+      if (this.contextRef && typeof this.contextRef.tracing?.stop === 'function') {
         try {
           const traceDir = path.resolve(this.runDir, 'browser-evidence');
           const tracePath = path.join(traceDir, 'trace.zip');
           await mkdir(traceDir, { recursive: true });
-          await ctx.tracing.stop({ path: tracePath });
+          await this.contextRef.tracing.stop({ path: tracePath });
           await this.artifactStore.copy(tracePath, 'playwright-trace', 'trace.zip', {
             traceId: this.traceWriter.getTraceId(),
             spanId,

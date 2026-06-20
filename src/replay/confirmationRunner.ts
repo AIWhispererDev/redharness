@@ -78,7 +78,10 @@ export async function confirmFinding(
 
         const body = await response.text();
         const statusMatch = response.status === spec.expectedStatus;
-        const bodyMatch = body.includes(spec.assertion) || new RegExp(spec.assertion).test(body);
+        // Check assertion against raw body (substring match is safe;
+        // regex fallback uses escaped assertion to avoid syntax errors).
+        const escapedAssertion = spec.assertion.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const bodyMatch = body.includes(spec.assertion) || new RegExp(escapedAssertion, 'i').test(body);
         const reproduced = statusMatch && bodyMatch;
 
         attempts.push(i + 1);
