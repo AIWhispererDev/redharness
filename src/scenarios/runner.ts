@@ -5,6 +5,7 @@ import type { ScenarioDefinition } from './schema.js';
 import { executeAction, evaluateAssertion, type CaptureStore } from './actions.js';
 import { loadPackFromDir } from '../pack.js';
 import type { GradingInput, Grade } from '../graders/grader.js';
+import type { Grader } from '../graders/grader.js';
 import type { ExecutionStatus } from '../core/status.js';
 
 export type TrialResult = {
@@ -34,7 +35,7 @@ export type ScenarioRunnerOptions = {
   storageState?: string;
   headless?: boolean;
   outputDir?: string;
-  graders?: Array<{ id: string; version: string; grade(input: GradingInput): Promise<Grade> }>;
+  graders?: Array<Grader>;
 };
 
 /**
@@ -58,29 +59,34 @@ export async function runScenario(
 
     let trialStatus: ExecutionStatus = 'passed';
     let trialError: string | undefined;
+    let beforeState: Record<string, unknown> = {};
+    let afterState: Record<string, unknown> = {};
 
     try {
-      const browser = await chromium.launch({ headless: options.headless ?? true });
-      const context = options.storageState
-        ? await browser.newContext({ storageState: options.storageState })
-        : await browser.newContext();
-      const page = await context.newPage();
-
-      try {
-        // Setup steps (default to empty array if not provided)
+      if (scenario.target.kind === 'fixture') {
+        // Fixture target: use HTTP directly (no browser needed)
         const setupActions = scenario.setup ?? [];
         for (const action of setupActions) {
-          await executeAction(page, action, captures, options.baseUrl);
+          await executeFixtureAction(action, captures, options.baseUrl);
         }
 
-        // Main steps
+        // Capture before state if state-diff grading is configured
+        if (scenario.graders?.some((g) => g.type === 'state-diff')) {
+          beforeState = await fetchJson(`${options.baseUrl}/state`);
+        }
+
         for (const step of scenario.steps) {
-          await executeAction(page, step, captures, options.baseUrl);
+          await executeFixtureAction(step, captures, options.baseUrl);
         }
 
-        // Assertions
+        // Capture after state
+        if (scenario.graders?.some((g) => g.type === 'state-diff')) {
+          afterState = await fetchJson(`${options.baseUrl}/state`);
+        }
+
+        // Fixture assertions via HTTP
         for (const assertion of scenario.expected) {
-          const result = await evaluateAssertion(page, assertion, captures);
+          const result = await evaluateFixtureAssertion(assertion, captures, options.baseUrl);
           assertions.push({
             name: assertion.assertion,
             passed: result.passed,
@@ -89,21 +95,54 @@ export async function runScenario(
           if (!result.passed) trialStatus = 'failed';
         }
 
-        pageText = await page.locator('body').innerText().catch(() => '');
-      } finally {
-        if (scenario.cleanup?.strategy === 'navigate-home') {
-          await page.goto(options.baseUrl, {
-            waitUntil: 'domcontentloaded',
-            timeout: 10_000,
-          }).catch(() => {});
-        } else if (scenario.cleanup?.strategy === 'reset-session') {
-          await context.clearCookies().catch(() => {});
-          await page.evaluate(() => {
-            localStorage.clear();
-            sessionStorage.clear();
-          }).catch(() => {});
+        // Cleanup
+        if (scenario.cleanup?.strategy === 'reset-session') {
+          await fetch(`${options.baseUrl}/reset`, { method: 'POST' }).catch(() => {});
         }
-        await browser.close();
+      } else {
+        // Browser target (default)
+        const browser = await chromium.launch({ headless: options.headless ?? true });
+        const context = options.storageState
+          ? await browser.newContext({ storageState: options.storageState })
+          : await browser.newContext();
+        const page = await context.newPage();
+
+        try {
+          const setupActions = scenario.setup ?? [];
+          for (const action of setupActions) {
+            await executeAction(page, action, captures, options.baseUrl);
+          }
+
+          for (const step of scenario.steps) {
+            await executeAction(page, step, captures, options.baseUrl);
+          }
+
+          for (const assertion of scenario.expected) {
+            const result = await evaluateAssertion(page, assertion, captures);
+            assertions.push({
+              name: assertion.assertion,
+              passed: result.passed,
+              message: result.message,
+            });
+            if (!result.passed) trialStatus = 'failed';
+          }
+
+          pageText = await page.locator('body').innerText().catch(() => '');
+        } finally {
+          if (scenario.cleanup?.strategy === 'navigate-home') {
+            await page.goto(options.baseUrl, {
+              waitUntil: 'domcontentloaded',
+              timeout: 10_000,
+            }).catch(() => {});
+          } else if (scenario.cleanup?.strategy === 'reset-session') {
+            await context.clearCookies().catch(() => {});
+            await page.evaluate(() => {
+              localStorage.clear();
+              sessionStorage.clear();
+            }).catch(() => {});
+          }
+          await browser.close();
+        }
       }
     } catch (error) {
       trialStatus = 'error';
@@ -120,7 +159,13 @@ export async function runScenario(
         const gradeInput: GradingInput = {
           response: pageText,
           target: graderDef.target ?? 'page_text',
-          context: { scenarioId: scenario.id, trial: t },
+          context: {
+            scenarioId: scenario.id,
+            trial: t,
+            beforeState,
+            afterState,
+            toolCalls: [],
+          },
         };
 
         try {
@@ -169,4 +214,98 @@ export async function runScenario(
     endedAt: new Date().toISOString(),
     durationMs: Date.now() - startMs,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Fixture execution helpers
+// ---------------------------------------------------------------------------
+
+async function fetchJson(url: string): Promise<Record<string, unknown>> {
+  const resp = await fetch(url);
+  return resp.json() as Promise<Record<string, unknown>>;
+}
+
+async function executeFixtureAction(
+  action: import('./schema.js').ScenarioAction,
+  captures: CaptureStore,
+  baseUrl: string,
+): Promise<void> {
+  switch (action.action) {
+    case 'goto':
+      // For fixture targets, 'goto' means a simple HTTP GET
+      await fetch(action.url.startsWith('http') ? action.url : `${baseUrl}${action.url}`);
+      break;
+
+    case 'capture': {
+      const url = `${baseUrl}${action.selector ?? '/'}`;
+      const resp = await fetch(url);
+      const text = await resp.text();
+      captures.set(action.as, text);
+      break;
+    }
+
+    case 'wait':
+      await new Promise((r) => setTimeout(r, action.ms));
+      break;
+
+    default:
+      // Other actions are ignored for fixture targets
+      break;
+  }
+}
+
+async function evaluateFixtureAssertion(
+  assertion: import('./schema.js').ScenarioAssertion,
+  captures: CaptureStore,
+  baseUrl: string,
+): Promise<{ passed: boolean; message: string }> {
+  const resolveUrl = (path: string): string =>
+    path.startsWith('http') ? path : `${baseUrl}${path}`;
+
+  switch (assertion.assertion) {
+    case 'text_present': {
+      // First try captures (set by capture actions)
+      const captureText = Array.from(captures.values()).join(' ');
+      if (captureText && captureText.includes(assertion.text)) {
+        return { passed: true, message: 'Text found in captured content' };
+      }
+      // Fall back to fetching the base URL
+      const resp = await fetch(resolveUrl('/'));
+      const text = await resp.text();
+      const passed = text.includes(assertion.text);
+      return { passed, message: passed ? 'Text found on page' : `Text "${assertion.text}" not found` };
+    }
+
+    case 'url_matches': {
+      const passed = new RegExp(assertion.pattern).test(baseUrl);
+      return { passed, message: passed ? 'URL matches' : `URL ${baseUrl} does not match ${assertion.pattern}` };
+    }
+
+    case 'state_equals': {
+      try {
+        const state = await fetchJson(`${baseUrl}/state`);
+        const actual = getNestedValue(state, assertion.path);
+        const passed = JSON.stringify(actual) === JSON.stringify(assertion.expected);
+        return {
+          passed,
+          message: passed
+            ? `State at "${assertion.path}" equals expected`
+            : `State at "${assertion.path}": expected ${JSON.stringify(assertion.expected)}, got ${JSON.stringify(actual)}`,
+        };
+      } catch (error) {
+        return { passed: false, message: `State fetch failed: ${error}` };
+      }
+    }
+
+    default:
+      return { passed: false, message: `Assertion "${assertion.assertion}" not supported for fixture targets` };
+  }
+}
+
+/** Get a nested value from an object by dot-separated path. */
+function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
+  return path.split('.').reduce((acc: unknown, key: string) => {
+    if (acc && typeof acc === 'object') return (acc as Record<string, unknown>)[key];
+    return undefined;
+  }, obj);
 }
