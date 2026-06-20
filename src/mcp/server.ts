@@ -85,6 +85,14 @@ export class McpServer {
     });
   }
 
+  private safeIdentifier(value: unknown, label: string): string {
+    const identifier = String(value ?? '');
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(identifier)) {
+      throw new Error(`${label} must be a simple identifier`);
+    }
+    return identifier;
+  }
+
   /**
    * Handle an MCP tool invocation.
    * This is the main dispatch for all MCP tools.
@@ -242,7 +250,7 @@ export class McpServer {
   }
 
   private async handleListDatasets(params: Record<string, unknown>): Promise<McpToolResponse> {
-    const packId = String(params.pack ?? '');
+    const packId = this.safeIdentifier(params.pack, 'pack');
     if (!packId) {
       return { content: [{ type: 'text', text: 'pack parameter is required' }], isError: true };
     }
@@ -270,8 +278,8 @@ export class McpServer {
   }
 
   private async handleValidateDataset(params: Record<string, unknown>): Promise<McpToolResponse> {
-    const packId = String(params.pack ?? '');
-    const datasetId = String(params.dataset ?? '');
+    const packId = this.safeIdentifier(params.pack, 'pack');
+    const datasetId = this.safeIdentifier(params.dataset, 'dataset');
 
     if (!packId || !datasetId) {
       return { content: [{ type: 'text', text: 'pack and dataset parameters are required' }], isError: true };
@@ -302,7 +310,7 @@ export class McpServer {
     }
 
     const result = await this.service.startRunDetached({
-      packId: String(params.pack ?? ''),
+      packId: this.safeIdentifier(params.pack, 'pack'),
       profile: params.profile ? String(params.profile) : undefined,
       suites: params.suites ? (params.suites as string[]) : undefined,
       tags: params.tags ? (params.tags as string[]) : undefined,
