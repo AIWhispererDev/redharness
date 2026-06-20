@@ -84,6 +84,8 @@ export type ScenarioComparison = {
   resolvedFindings: FindingRef[];
   regressed: boolean;
   improved: boolean;
+  /** Grader IDs and versions used for this scenario (baseline + candidate). */
+  graderVersions?: Array<{ id: string; version: string }>;
 };
 
 export type RunComparison = {
@@ -98,6 +100,8 @@ export type RunComparison = {
   overallRegressed: boolean;
   overallImproved: boolean;
   createdAt: string;
+  /** Grader IDs and versions used across the comparison. */
+  graderVersions?: Array<{ id: string; version: string }>;
 };
 
 // ---------------------------------------------------------------------------
@@ -156,6 +160,8 @@ export type CandidateRunResult = {
   config: CandidateConfig;
   runId: string;
   status: ExecutionStatus;
+  /** Grader IDs and versions used in this run. */
+  graderVersions?: Array<{ id: string; version: string }>;
   suiteResults: Array<{
     suiteId: string;
     scenarioId: string;
@@ -165,5 +171,7 @@ export type CandidateRunResult = {
     tags?: string[];
     /** Individual repeated-trial outcomes when Pass@K is evaluated. */
     trialStatuses?: ExecutionStatus[];
+    /** Grader IDs and versions used for this suite. */
+    graderVersions?: Array<{ id: string; version: string }>;
   }>;
 };

@@ -44,10 +44,19 @@ export class TrajectoryGrader implements Grader {
     }
 
     // Check ordering constraints
+    // When allowEquivalentPaths is true, the constraint passes if both tools
+    // appear in the call sequence regardless of strict ordering.
     for (const ord of this.constraint.ordering ?? []) {
       const beforeIdx = toolCalls.indexOf(ord.before);
       const afterIdx = toolCalls.indexOf(ord.after);
-      const ok = beforeIdx >= 0 && afterIdx >= 0 && beforeIdx < afterIdx;
+      let ok: boolean;
+      if (this.constraint.allowEquivalentPaths) {
+        // With equivalent paths, any call sequence that includes both is fine
+        ok = beforeIdx >= 0 && afterIdx >= 0;
+      } else {
+        // Strict ordering: before must come before after
+        ok = beforeIdx >= 0 && afterIdx >= 0 && beforeIdx < afterIdx;
+      }
       evidence.push({
         description: `Order "${ord.before}" before "${ord.after}": ${ok ? 'ok' : 'violated'}`,
       });

@@ -46,12 +46,16 @@ graderRegistry.register('trajectory', (config) => {
   return new TrajectoryGrader((config?.constraint ?? {}) as any);
 });
 
-// Rules grader is registered dynamically once rules are loaded
+// Rules grader — supports 'rule-set' type for text-rule grading
+import { RulesGrader } from './rules.js';
+graderRegistry.register('rule-set', (config) => {
+  const rules = (config?.rules as any[]) ?? [];
+  return new RulesGrader(rules);
+});
+
+// Re-export for explicit dynamic registration (e.g. CLI loading from pack)
 export function registerRulesGrader(rules: any[]): void {
-  graderRegistry.register('rule-set', () => {
-    const { RulesGrader } = require('./rules.js');
-    return new RulesGrader(rules);
-  });
+  graderRegistry.register('rule-set', () => new RulesGrader(rules));
 }
 
 // State-diff grader is registered lazily

@@ -16,6 +16,34 @@ import type {
 } from './experimentTypes.js';
 import type { ExecutionStatus } from '../core/status.js';
 
+/**
+ * Validate that two candidate runs use compatible datasets before comparison.
+ * Returns an empty array on success, or error messages on mismatch.
+ */
+export function validateDatasetCompatibility(
+  baseline: CandidateRunResult,
+  candidate: CandidateRunResult,
+): string[] {
+  const errors: string[] = [];
+  const bDsId = baseline.config.metadata?.datasetId as string | undefined;
+  const cDsId = candidate.config.metadata?.datasetId as string | undefined;
+  const bDsVer = baseline.config.metadata?.datasetVersion as string | undefined;
+  const cDsVer = candidate.config.metadata?.datasetVersion as string | undefined;
+  const bHash = baseline.config.metadata?.contentHash as string | undefined;
+  const cHash = candidate.config.metadata?.contentHash as string | undefined;
+
+  if (bDsId && cDsId && bDsId !== cDsId) {
+    errors.push(`Dataset ID mismatch: "${bDsId}" vs "${cDsId}"`);
+  }
+  if (bHash && cHash && bHash !== cHash) {
+    errors.push(`Dataset contentHash mismatch: "${bHash}" vs "${cHash}"`);
+  }
+  if (bDsVer && cDsVer && bDsVer !== cDsVer) {
+    errors.push(`Dataset version mismatch: "${bDsVer}" vs "${cDsVer}"`);
+  }
+  return errors;
+}
+
 export type CompareOptions = {
   baselineLabel: string;
   candidateLabel: string;
@@ -150,11 +178,18 @@ export function compareRuns(
       resolvedFindings,
       regressed,
       improved,
+      graderVersions: baselineResult.graderVersions ?? candidateResult.graderVersions,
     });
   }
 
   const overallRegressed = scenarioComparisons.some((s) => s.regressed);
   const overallImproved = scenarioComparisons.some((s) => s.improved);
+
+  // Aggregate unique grader versions across both runs
+  const allGraderVersions = new Map<string, string>();
+  for (const gv of [...(baseline.graderVersions ?? []), ...(candidate.graderVersions ?? [])]) {
+    allGraderVersions.set(gv.id, gv.version);
+  }
 
   return {
     baselineRunId: baseline.runId,
@@ -168,6 +203,9 @@ export function compareRuns(
     overallRegressed,
     overallImproved,
     createdAt: new Date().toISOString(),
+    graderVersions: allGraderVersions.size > 0
+      ? [...allGraderVersions.entries()].map(([id, version]) => ({ id, version }))
+      : undefined,
   };
 }
 
