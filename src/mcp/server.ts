@@ -7,19 +7,24 @@
  * Tools:
  *   qa_list_packs, qa_list_suites, qa_list_datasets,
  *   qa_validate_dataset, qa_start_run, qa_get_run,
- *   qa_cancel_run, qa_compare_runs, qa_list_findings, qa_get_finding
+ *   qa_cancel_run, qa_compare_runs, qa_list_findings, qa_get_finding,
+ *   qa_list_baselines, qa_get_baseline
  *
  * Resources:
  *   qa://runs/<run-id>/summary
  *   qa://runs/<run-id>/manifest
  *   qa://findings/<finding-id>
  *   qa://datasets/<pack>/<dataset>/<version>
+ *   qa://baselines/<name>
+ *   qa://baselines/<name>/run
  *
  * Security:
  *   - Read operations are default
  *   - Run/cancel operations require explicit server configuration
  *   - No raw storage-state or secrets are exposed
  *   - Artifact access is scoped to approved run roots
+ *   - All user-supplied identifiers are validated against a strict pattern
+ *   - Resource URIs are validated for path containment within approved roots
  */
 
 import path from 'node:path';
@@ -85,12 +90,70 @@ export class McpServer {
     });
   }
 
+  /**
+   * Validate a user-supplied identifier against the strict safe pattern.
+   * This is applied to ALL identifiers that reach filesystem paths,
+   * database lookups, or resource URIs.
+   *
+   * The safe pattern allows only alphanumeric chars, dots, underscores,
+   * and hyphens, and must start with a letter or digit.
+   *
+   * For runId and findingId, which may contain a forward-slash separator
+   * (e.g. "run-123/suite-abc"), an extended variant is available.
+   */
   private safeIdentifier(value: unknown, label: string): string {
+    return this.validateIdentifier(value, label, /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/);
+  }
+
+  /**
+   * Like safeIdentifier but allows a single forward slash separator
+   * for compound identifiers (runId/findingId).
+   */
+  private safeCompoundIdentifier(value: unknown, label: string): string {
+    return this.validateIdentifier(value, label, /^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/);
+  }
+
+  private validateIdentifier(
+    value: unknown,
+    label: string,
+    pattern: RegExp,
+  ): string {
     const identifier = String(value ?? '');
-    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(identifier)) {
-      throw new Error(`${label} must be a simple identifier`);
+    if (!identifier) {
+      throw new Error(`${label} must not be empty`);
+    }
+    if (identifier.length > 256) {
+      throw new Error(`${label} must not exceed 256 characters`);
+    }
+    if (!pattern.test(identifier)) {
+      throw new Error(
+        `${label} must be a simple identifier matching ${pattern.source}`,
+      );
     }
     return identifier;
+  }
+
+  /**
+   * Validate that a path is contained within one of the approved roots.
+   * Resolves symlinks and prevents traversal via .. or absolute paths
+   * that escape approved boundaries.
+   */
+  private checkPathContainment(resolvedPath: string): void {
+    const target = path.resolve(resolvedPath);
+    const roots = this.config.approvedRunRoots ?? [];
+    for (const root of roots) {
+      const resolvedRoot = path.resolve(root);
+      const relative = path.relative(resolvedRoot, target);
+      if (
+        relative === '' ||
+        (!relative.startsWith('..') && !path.isAbsolute(relative))
+      ) {
+        return; // Allowed — inside this root
+      }
+    }
+    throw new Error(
+      `Path is outside approved roots. Allowed roots: ${roots.join(', ')}`,
+    );
   }
 
   /**
@@ -120,6 +183,10 @@ export class McpServer {
           return await this.handleListFindings(request.params);
         case 'qa_get_finding':
           return await this.handleGetFinding(request.params);
+        case 'qa_list_baselines':
+          return await this.handleListBaselines();
+        case 'qa_get_baseline':
+          return await this.handleGetBaseline(request.params);
         default:
           return {
             content: [{ type: 'text', text: `Unknown tool: ${request.method}` }],
@@ -139,6 +206,9 @@ export class McpServer {
 
   /**
    * Handle resource access (qa:// URIs).
+   *
+   * Security: Every path component from the URI is validated against
+   * safeIdentifier rules before use in service calls or filesystem paths.
    */
   async handleResource(uri: string): Promise<McpToolResponse> {
     try {
@@ -152,12 +222,28 @@ export class McpServer {
       // (e.g. "runs") is in parsed.host, not pathname. Concatenate them.
       const pathParts = [parsed.host, ...parsed.pathname.replace(/^\//, '').split('/')].filter(Boolean);
 
+      // All resources must have at least 2 path parts.
+      if (pathParts.length < 2) {
+        return { content: [{ type: 'text', text: 'Malformed resource URI' }], isError: true };
+      }
+
+      // Validate all path parts except the resource type prefix are safe identifiers
+      // The first part (resource type: 'runs', 'findings', 'datasets', 'baselines')
+      // must also be safe to prevent structural traversal.
+      for (const part of pathParts) {
+        this.safeIdentifier(part, 'resource path component');
+      }
+
       // qa://runs/<run-id>/summary
       if (pathParts[0] === 'runs' && pathParts.length === 3 && pathParts[2] === 'summary') {
         const runId = pathParts[1];
-        const { manifest } = await this.service.getRun(runId);
+        const { manifest, entry } = await this.service.getRun(runId);
         if (!manifest) {
           return { content: [{ type: 'text', text: `Run not found: ${runId}` }], isError: true };
+        }
+        // Verify the run directory is within approved roots
+        if (entry?.runDir) {
+          this.checkPathContainment(entry.runDir);
         }
         return {
           content: [{
@@ -170,9 +256,12 @@ export class McpServer {
       // qa://runs/<run-id>/manifest
       if (pathParts[0] === 'runs' && pathParts.length === 3 && pathParts[2] === 'manifest') {
         const runId = pathParts[1];
-        const { manifest } = await this.service.getRun(runId);
+        const { manifest, entry } = await this.service.getRun(runId);
         if (!manifest) {
           return { content: [{ type: 'text', text: `Run not found: ${runId}` }], isError: true };
+        }
+        if (entry?.runDir) {
+          this.checkPathContainment(entry.runDir);
         }
         return {
           content: [{ type: 'text', text: JSON.stringify(manifest, null, 2) }],
@@ -191,12 +280,41 @@ export class McpServer {
         };
       }
 
-      // qa://datasets/<pack>/<dataset>/<version>
+      // qa://datasets/<pack>/<dataset>
       if (pathParts[0] === 'datasets' && pathParts.length >= 3) {
-        const [, packId, datasetId] = pathParts;
+        const packId = pathParts[1];
+        const datasetId = pathParts[2];
         const validation = await this.service.validateDataset(packId, datasetId);
         return {
           content: [{ type: 'text', text: `Dataset ${datasetId} for ${packId}: ${validation.scenarioCount} scenarios, valid: ${validation.valid}` }],
+        };
+      }
+
+      // qa://baselines/<name>
+      if (pathParts[0] === 'baselines' && pathParts.length === 2) {
+        const baselineName = pathParts[1];
+        const baseline = await this.service.getBaseline(baselineName);
+        if (!baseline) {
+          return { content: [{ type: 'text', text: `Baseline not found: ${baselineName}` }], isError: true };
+        }
+        return {
+          content: [{ type: 'text', text: JSON.stringify(baseline, null, 2) }],
+        };
+      }
+
+      // qa://baselines/<name>/run
+      if (pathParts[0] === 'baselines' && pathParts.length === 3 && pathParts[2] === 'run') {
+        const baselineName = pathParts[1];
+        const baseline = await this.service.getBaseline(baselineName);
+        if (!baseline) {
+          return { content: [{ type: 'text', text: `Baseline not found: ${baselineName}` }], isError: true };
+        }
+        const { manifest } = await this.service.getRun(baseline.runId);
+        if (!manifest) {
+          return { content: [{ type: 'text', text: `Run not found for baseline: ${baselineName}` }], isError: true };
+        }
+        return {
+          content: [{ type: 'text', text: JSON.stringify(manifest, null, 2) }],
         };
       }
 
@@ -342,12 +460,21 @@ export class McpServer {
   }
 
   private async handleGetRun(params: Record<string, unknown>): Promise<McpToolResponse> {
-    const runId = String(params.runId ?? '');
-    if (!runId) {
-      return { content: [{ type: 'text', text: 'runId parameter is required' }], isError: true };
+    let runId: string;
+    try {
+      runId = this.safeIdentifier(params.runId, 'runId');
+    } catch {
+      return { content: [{ type: 'text', text: 'runId parameter is required and must be a simple identifier' }], isError: true };
     }
 
-    const { manifest } = await this.service.getRun(runId);
+    const { manifest, entry } = await this.service.getRun(runId);
+    if (entry?.runDir) {
+      try {
+        this.checkPathContainment(entry.runDir);
+      } catch {
+        return { content: [{ type: 'text', text: 'Run directory is outside approved roots' }], isError: true };
+      }
+    }
     if (!manifest) {
       return { content: [{ type: 'text', text: `Run not found: ${runId}` }], isError: true };
     }
@@ -385,9 +512,11 @@ export class McpServer {
       };
     }
 
-    const runId = String(params.runId ?? '');
-    if (!runId) {
-      return { content: [{ type: 'text', text: 'runId parameter is required' }], isError: true };
+    let runId: string;
+    try {
+      runId = this.safeIdentifier(params.runId, 'runId');
+    } catch {
+      return { content: [{ type: 'text', text: 'runId parameter is required and must be a simple identifier' }], isError: true };
     }
 
     const success = await this.service.cancelRun(runId);
@@ -396,15 +525,49 @@ export class McpServer {
     };
   }
 
-  private async handleCompareRuns(params: Record<string, unknown>): Promise<McpToolResponse> {
-    const baseline = String(params.baseline ?? '');
-    const candidate = String(params.candidate ?? '');
-
-    if (!baseline || !candidate) {
-      return { content: [{ type: 'text', text: 'baseline and candidate parameters are required' }], isError: true };
+  /**
+   * Resolve a baseline name to a run ID if the supplied string matches
+   * a promoted baseline name. Otherwise treat it as a raw run ID.
+   */
+  private async resolveBaselineOrRunId(value: string): Promise<string> {
+    try {
+      // First check if it matches a simple runId pattern
+      this.safeIdentifier(value, 'value');
+    } catch {
+      throw new Error('Invalid run ID or baseline name');
     }
 
-    const result = await this.service.compareRuns(baseline, candidate);
+    // Check if the value is a named baseline
+    const baseline = await this.service.getBaseline(value);
+    if (baseline) {
+      return baseline.runId;
+    }
+
+    // Treat as a raw run ID
+    return value;
+  }
+
+  private async handleCompareRuns(params: Record<string, unknown>): Promise<McpToolResponse> {
+    let baselineParam: string;
+    let candidateParam: string;
+    try {
+      baselineParam = this.safeIdentifier(params.baseline, 'baseline');
+      candidateParam = this.safeIdentifier(params.candidate, 'candidate');
+    } catch {
+      return { content: [{ type: 'text', text: 'baseline and candidate parameters must be simple identifiers' }], isError: true };
+    }
+
+    // Resolve named baselines to their underlying run IDs
+    let baselineRunId: string;
+    let candidateRunId: string;
+    try {
+      baselineRunId = await this.resolveBaselineOrRunId(baselineParam);
+      candidateRunId = await this.resolveBaselineOrRunId(candidateParam);
+    } catch {
+      return { content: [{ type: 'text', text: 'Could not resolve baseline or candidate to a valid run ID' }], isError: true };
+    }
+
+    const result = await this.service.compareRuns(baselineRunId, candidateRunId);
     if (result.error) {
       return { content: [{ type: 'text', text: result.error }], isError: true };
     }
@@ -415,9 +578,11 @@ export class McpServer {
   }
 
   private async handleListFindings(params: Record<string, unknown>): Promise<McpToolResponse> {
-    const runId = String(params.runId ?? '');
-    if (!runId) {
-      return { content: [{ type: 'text', text: 'runId parameter is required' }], isError: true };
+    let runId: string;
+    try {
+      runId = this.safeIdentifier(params.runId, 'runId');
+    } catch {
+      return { content: [{ type: 'text', text: 'runId parameter is required and must be a simple identifier' }], isError: true };
     }
 
     const findings = await this.service.listFindings(runId);
@@ -427,9 +592,12 @@ export class McpServer {
   }
 
   private async handleGetFinding(params: Record<string, unknown>): Promise<McpToolResponse> {
-    const findingId = String(params.findingId ?? '');
-    if (!findingId) {
-      return { content: [{ type: 'text', text: 'findingId parameter is required' }], isError: true };
+    let findingId: string;
+    try {
+      // findingId may contain a forward slash (e.g. "run-123/suite-abc")
+      findingId = this.safeCompoundIdentifier(params.findingId, 'findingId');
+    } catch {
+      return { content: [{ type: 'text', text: 'findingId parameter is required and must be a simple identifier' }], isError: true };
     }
 
     const finding = await this.service.getFinding(findingId);
@@ -439,6 +607,35 @@ export class McpServer {
 
     return {
       content: [{ type: 'text', text: JSON.stringify(finding, null, 2) }],
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Baseline tool handlers
+  // ---------------------------------------------------------------------------
+
+  private async handleListBaselines(): Promise<McpToolResponse> {
+    const baselines = await this.service.listBaselines();
+    return {
+      content: [{ type: 'text', text: JSON.stringify(baselines, null, 2) }],
+    };
+  }
+
+  private async handleGetBaseline(params: Record<string, unknown>): Promise<McpToolResponse> {
+    let name: string;
+    try {
+      name = this.safeIdentifier(params.name, 'baseline name');
+    } catch {
+      return { content: [{ type: 'text', text: 'name parameter is required and must be a simple identifier' }], isError: true };
+    }
+
+    const baseline = await this.service.getBaseline(name);
+    if (!baseline) {
+      return { content: [{ type: 'text', text: `Baseline not found: ${name}` }], isError: true };
+    }
+
+    return {
+      content: [{ type: 'text', text: JSON.stringify(baseline, null, 2) }],
     };
   }
 
@@ -487,7 +684,9 @@ export class McpServer {
             { uri: 'qa://runs/{runId}/summary', name: 'Run summary' },
             { uri: 'qa://runs/{runId}/manifest', name: 'Run manifest' },
             { uri: 'qa://findings/{findingId}', name: 'Finding' },
-            { uri: 'qa://datasets/{pack}/{dataset}/{version}', name: 'Dataset' },
+            { uri: 'qa://datasets/{pack}/{dataset}', name: 'Dataset info' },
+            { uri: 'qa://baselines/{name}', name: 'Baseline entry' },
+            { uri: 'qa://baselines/{name}/run', name: 'Baseline run manifest' },
           ],
         },
       });
@@ -530,6 +729,8 @@ export class McpServer {
       { name: 'qa_compare_runs', description: 'Compare baseline and candidate runs', inputSchema: objectSchema({ baseline: text, candidate: text }, ['baseline', 'candidate']) },
       { name: 'qa_list_findings', description: 'List findings for a run', inputSchema: objectSchema({ runId: text }, ['runId']) },
       { name: 'qa_get_finding', description: 'Get one finding', inputSchema: objectSchema({ findingId: text }, ['findingId']) },
+      { name: 'qa_list_baselines', description: 'List all named baselines', inputSchema: objectSchema({}) },
+      { name: 'qa_get_baseline', description: 'Resolve a named baseline to its run ID', inputSchema: objectSchema({ name: text }, ['name']) },
     ];
   }
 }
