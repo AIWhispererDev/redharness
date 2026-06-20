@@ -245,6 +245,14 @@ describe('RunCatalog', () => {
 
       const notFound = await catalog.getRun('nonexistent');
       expect(notFound).toBeNull();
+
+      const promoted = await catalog.promoteBaseline('release', manifest.runId);
+      expect(promoted.runId).toBe(manifest.runId);
+      expect(await catalog.listBaselines()).toEqual([promoted]);
+
+      // Re-indexing is idempotent.
+      await catalog.indexRun(manifest, '/tmp/runs/test-run-001');
+      expect(await catalog.getAll()).toHaveLength(1);
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }

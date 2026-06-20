@@ -380,6 +380,18 @@ export class HarnessService {
     return { comparison };
   }
 
+  async promoteBaseline(name: string, runId: string) {
+    return this.catalog.promoteBaseline(name, runId);
+  }
+
+  async listBaselines() {
+    return this.catalog.listBaselines();
+  }
+
+  async rebuildCatalog(): Promise<number> {
+    return this.catalog.rebuild(this.options.runsBaseDir);
+  }
+
   // ---------------------------------------------------------------------------
   // Findings
   // ---------------------------------------------------------------------------
