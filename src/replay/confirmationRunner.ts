@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { chromium, type Page } from 'playwright';
 import type { ReplaySpec, FindingPacketV2, FindingLifecycleState } from '../trace/traceTypes.js';
 
 /**
@@ -101,21 +102,38 @@ export async function confirmFinding(
     };
   }
 
-  // Browser confirmation — validate spec structure and mark as needs-authoring
+  // Browser confirmation — execute the recorded actions and assertion.
   if (spec.mode === 'browser') {
-    const hasActions = spec.actions.length > 0;
-    const hasSetup = spec.setup.length > 0;
-    const validSpec = hasActions || hasSetup;
-
+    for (let i = 0; i < maxAttempts; i++) {
+      const browser = await chromium.launch({ headless: true });
+      try {
+        const page = await browser.newPage();
+        for (const action of [...spec.setup, ...spec.actions]) {
+          await executeBrowserAction(page, action);
+        }
+        await assertBrowserOutcome(page, spec.assertion);
+        attempts.push(i + 1);
+        return {
+          findingId: packet.findingId,
+          lifecycleState: 'confirmed-semantic',
+          reproduced: true,
+          attempts: attempts.length,
+          evidencePaths: spec.linkedArtifactIds ?? [],
+          message: `Browser replay confirmed on attempt ${i + 1}`,
+        };
+      } catch {
+        attempts.push(i + 1);
+      } finally {
+        await browser.close();
+      }
+    }
     return {
       findingId: packet.findingId,
-      lifecycleState: validSpec ? 'suspected' : 'suspected',
+      lifecycleState: 'suspected',
       reproduced: false,
-      attempts: 1,
+      attempts: attempts.length,
       evidencePaths: spec.linkedArtifactIds ?? [],
-      message: validSpec
-        ? `Browser replay spec is well-formed (${spec.actions.length} actions). Requires Playwright execution for confirmation.`
-        : 'Browser replay spec is empty — needs authoring',
+      message: `Browser replay did not reproduce after ${attempts.length} attempt(s)`,
     };
   }
 
@@ -140,23 +158,14 @@ export async function confirmFromPacket(
   const content = await readFile(jsonPath, 'utf8');
   const packet = JSON.parse(content) as FindingPacketV2;
 
-  // Find the replay spec (try JSON first, then infer from packet data)
-  const specPath = path.join(packetDir, 'replay.spec.ts');
+  // Load the machine-readable replay specification written with the packet.
+  const specPath = path.join(packetDir, 'replay.json');
   let spec: ReplaySpec;
 
   try {
-    await readFile(specPath, 'utf8');
-    // We have a spec file — reconstruct minimal spec from packet metadata
-    spec = {
-      mode: 'http',
-      method: 'GET',
-      url: packet.environment.baseUrl ?? '',
-      headers: {},
-      expectedStatus: 200,
-      assertion: packet.expectedState,
-    };
+    spec = JSON.parse(await readFile(specPath, 'utf8')) as ReplaySpec;
   } catch {
-    spec = {
+    spec = packet.replaySpec ?? {
       mode: 'guided',
       setupHint: packet.expectedState,
       unresolvedSteps: packet.steps,
@@ -191,3 +200,75 @@ export function isValidTransition(
 
 // Re-export for convenience
 export type { FindingLifecycleState };
+
+function locatorSelector(locator: import('../trace/traceTypes.js').LocatorRecipe): string {
+  if (locator.testId) return `[data-testid="${locator.testId}"]`;
+  if (locator.css) return locator.css;
+  if (locator.role && locator.name) return `[role="${locator.role}"]`;
+  if (locator.label) return `text=${locator.label}`;
+  return 'body';
+}
+
+async function executeBrowserAction(
+  page: Page,
+  action: import('../trace/traceTypes.js').RecordedAction,
+): Promise<void> {
+  switch (action.type) {
+    case 'goto':
+      await page.goto(action.url, { waitUntil: 'domcontentloaded' });
+      break;
+    case 'click':
+      await page.locator(locatorSelector(action.locator)).click();
+      break;
+    case 'fill':
+      await page.locator(locatorSelector(action.locator)).fill(action.valueRef);
+      break;
+    case 'press':
+      await page.keyboard.press(action.key);
+      break;
+    case 'reload':
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      break;
+    case 'waitFor':
+      if (action.condition.type === 'timeout') {
+        await page.waitForTimeout(action.condition.ms);
+      }
+      break;
+    case 'screenshot':
+      break;
+  }
+}
+
+async function assertBrowserOutcome(
+  page: Page,
+  assertion: import('../trace/traceTypes.js').AssertionRecipe,
+): Promise<void> {
+  if (assertion.type === 'url') {
+    if (!new RegExp(assertion.pattern).test(page.url())) {
+      throw new Error(`URL ${page.url()} did not match ${assertion.pattern}`);
+    }
+    return;
+  }
+  if (assertion.type === 'state') {
+    const actual = await page.evaluate((statePath) => {
+      const root = (globalThis as any).__QA_STATE__ ?? {};
+      return statePath.split('.').reduce(
+        (value: any, key: string) => value?.[key],
+        root,
+      );
+    }, assertion.path);
+    if (JSON.stringify(actual) !== JSON.stringify(assertion.expected)) {
+      throw new Error(`State at ${assertion.path} did not match expected value`);
+    }
+    return;
+  }
+  const locator = page.locator(locatorSelector(assertion.locator));
+  if (assertion.type === 'visible') {
+    if (!await locator.isVisible()) throw new Error('Expected locator to be visible');
+    return;
+  }
+  const text = await locator.textContent();
+  if (!text?.includes(assertion.value)) {
+    throw new Error(`Expected locator text to include ${assertion.value}`);
+  }
+}
