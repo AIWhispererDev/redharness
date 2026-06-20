@@ -241,8 +241,8 @@ describe('Cleanup', () => {
   it('handles fixture reset', async () => {
     const result = await executeCleanup('fixture_reset', {
       strategy: 'fixture_reset',
-      fixtureResetEndpoint: 'http://localhost:3000/reset',
     });
-    expect(result.status).toBe('passed');
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('No fixture reset endpoint');
   });
 });

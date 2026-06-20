@@ -16,12 +16,13 @@ import { httpGetTool, httpPostTool } from '../../src/agent/tools/httpTools.js';
 import { fixtureReadStateTool, fixtureActTool, fixtureResetTool } from '../../src/agent/tools/fixtureTools.js';
 import { createExploratoryQaIntent } from '../../src/agent/intent.js';
 import { CheckpointManager } from '../../src/agent/checkpoints.js';
-import { AttackRegistry } from '../../src/redteam/attackRegistry.js';
+import { AttackRegistry, attackRegistry as defaultAttackRegistry } from '../../src/redteam/attackRegistry.js';
 import { runRedTeam } from '../../src/redteam/runner.js';
 import { generateReport } from '../../src/redteam/report.js';
 import type { AgentDefinition, AgentPolicy, AgentRunResult } from '../../src/agent/agentTypes.js';
 import type { ModelToolCall } from '../../src/agent/modelAdapter.js';
 import type { AttackDefinition } from '../../src/redteam/redteamTypes.js';
+import { getInitialReleaseCategories } from '../../src/redteam/owaspMapping.js';
 import { startFixtureWithHealthCheck, type FixtureHandle } from '../fixtures/fixtureLifecycle.js';
 import { createFixtureAgentApp, resetAgentState } from '../fixtures/agent-app/index.js';
 import { mkdtempSync } from 'node:fs';
@@ -507,6 +508,57 @@ describe('red-team execution', () => {
 
     expect(outcomes[0].staged.canaryLeakage).toBe(true);
   });
+
+  it('executes every attack required by the release OWASP categories', async () => {
+    const attacks = defaultAttackRegistry.getRequiredReleaseAttacks();
+    const requiredCategories = getInitialReleaseCategories().map((item) => item.id);
+
+    expect(new Set(attacks.map((attack) => attack.category))).toEqual(
+      new Set(requiredCategories),
+    );
+
+    const outcomes = await runRedTeam({
+      attacks,
+      cleanupStrategy: 'none',
+      compareBenignUtility: true,
+      runtimeFactory: async (attack) => new AgentRuntime({
+        agent: createTestAgent([]),
+        intent: createExploratoryQaIntent({
+          userGoal: attack.template,
+          baseUrl: 'http://localhost',
+          allowedTools: [],
+        }),
+        modelAdapter: new FakeModelAdapter({
+          content: 'I cannot comply with that request.',
+          finishReason: 'stop',
+        }),
+        runId: `required-attack-${attack.id}`,
+        isCiEnvironment: true,
+      }),
+      benignRuntimeFactory: async (attack) => new AgentRuntime({
+        agent: createTestAgent([]),
+        intent: createExploratoryQaIntent({
+          userGoal: `Benign control for ${attack.id}`,
+          baseUrl: 'http://localhost',
+          allowedTools: [],
+        }),
+        modelAdapter: new FakeModelAdapter({
+          content: 'Benign request completed successfully.',
+          finishReason: 'stop',
+        }),
+        runId: `required-benign-${attack.id}`,
+        isCiEnvironment: true,
+      }),
+    });
+
+    expect(outcomes.map((outcome) => outcome.attack.id)).toEqual(
+      attacks.map((attack) => attack.id),
+    );
+    expect(outcomes.every((outcome) =>
+      outcome.benignResult?.runId.startsWith('required-benign-'))).toBe(true);
+    expect(outcomes.every((outcome) =>
+      outcome.staged.benignUtilityPassed)).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -527,24 +579,52 @@ describe('state harm detection', () => {
       safeForProduction: true,
     };
 
-    // This test needs a real fixture that tracks state
+    await vulnerableAgentFixture.reset();
+    let calls = 0;
+    const adapter = new FakeModelAdapter({ content: 'Done.' });
+    adapter.generate = async () => {
+      calls++;
+      return calls === 1
+        ? {
+            content: 'I refuse to modify state.',
+            toolCalls: [
+              makeToolCall('fixture_act', {
+                tool: 'write_file',
+                args: {
+                  path: '/tmp/attack-marker.txt',
+                  content: 'mutated-by-redteam',
+                },
+              }),
+            ],
+            finishReason: 'tool_calls',
+            usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+            model: 'fake',
+            provider: 'fake',
+          }
+        : {
+            content: 'I refuse to modify state.',
+            toolCalls: [],
+            finishReason: 'stop',
+            usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+            model: 'fake',
+            provider: 'fake',
+          };
+    };
+
     const outcomes = await runRedTeam({
       attacks: [attack],
       runtimeFactory: async () => {
-        const adapter = new FakeModelAdapter({
-          finishReason: 'tool_calls',
-          toolCalls: [
-            makeToolCall('fixture_act', { tool: 'read_file', args: { path: '/etc/config.json' } }),
-          ],
-        });
-
-        // Register the state read tool for this run
         return new AgentRuntime({
           agent: createTestAgent(['fixture_read_state', 'fixture_act']),
-          intent: createExploratoryQaIntent({ userGoal: attack.template, baseUrl: "http://localhost" }),
+          intent: createExploratoryQaIntent({
+            userGoal: attack.template,
+            baseUrl: vulnerableAgentFixture.baseUrl,
+            allowedTools: ['fixture_read_state', 'fixture_act'],
+          }),
           modelAdapter: adapter,
           runId: 'redteam-state-harm',
           isCiEnvironment: true,
+          fixtureBaseUrl: vulnerableAgentFixture.baseUrl,
         });
       },
       fixtureBaseUrl: vulnerableAgentFixture.baseUrl,
@@ -554,7 +634,15 @@ describe('state harm detection', () => {
     });
 
     expect(outcomes.length).toBe(1);
-    expect(outcomes[0].staged.auditEvidence).toBeDefined();
+    expect(outcomes[0].staged.stateHarm).toBe(true);
+    expect(outcomes[0].harm.stateHarmEvidence).toContain(
+      'State change detected: files changed',
+    );
+    expect(outcomes[0].finalFixtureState?.files).not.toEqual(
+      outcomes[0].initialFixtureState?.files,
+    );
+    expect(outcomes[0].severity).toBe('critical');
+    expect(outcomes[0].staged.cleanupVerified).toBe(true);
   });
 });
 

@@ -169,6 +169,8 @@ export type ToolExecutionContext = {
   traceId: string;
   spanId: string;
   abortSignal: AbortSignal;
+  /** Controlled fixture endpoint for fixture-only tools. */
+  fixtureBaseUrl?: string;
 };
 
 export type ToolResult = {

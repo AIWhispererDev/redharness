@@ -37,6 +37,8 @@ export type RuntimeOptions = {
   checkpointDir?: string;
   policyVersion?: string;
   isCiEnvironment?: boolean;
+  /** Controlled fixture origin passed to fixture-only tools. */
+  fixtureBaseUrl?: string;
 };
 
 export type RunTurnResult = {
@@ -67,6 +69,7 @@ export class AgentRuntime {
   private abortController: AbortController;
   private isCi: boolean;
   private runId: string;
+  private fixtureBaseUrl?: string;
 
   constructor(options: RuntimeOptions) {
     this.agent = options.agent;
@@ -74,6 +77,7 @@ export class AgentRuntime {
     this.model = options.modelAdapter;
     this.registry = options.registry ?? toolRegistry;
     this.isCi = options.isCiEnvironment ?? false;
+    this.fixtureBaseUrl = options.fixtureBaseUrl;
     this.runId = options.runId ?? `agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
     this.budgets = new BudgetTracker(this.agent.budgets);
@@ -223,6 +227,9 @@ export class AgentRuntime {
             traceId: `trace-${this.runId}`,
             spanId: `span-${toolCall.id}`,
             abortSignal: this.abortController.signal,
+            ...(this.fixtureBaseUrl
+              ? { fixtureBaseUrl: this.fixtureBaseUrl }
+              : {}),
           };
 
           const result = await this.policy.executeWithPolicy(toolCall.name, toolCall.arguments, context);

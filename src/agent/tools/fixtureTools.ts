@@ -23,7 +23,7 @@ export const fixtureReadStateTool: ToolDefinition = {
   capabilities: ['fixture'],
   async execute(_args: Record<string, unknown>, context: ToolExecutionContext): Promise<ToolResult> {
     // The baseUrl must be set in the agent config or tool context
-    const baseUrl = (context as any).fixtureBaseUrl as string | undefined;
+    const baseUrl = context.fixtureBaseUrl;
     if (!baseUrl) {
       return { success: false, error: 'No fixture baseUrl configured', durationMs: 0 };
     }
@@ -58,7 +58,7 @@ export const fixtureActTool: ToolDefinition = {
   risk: 'write',
   capabilities: ['fixture', 'mutation'],
   async execute(args: Record<string, unknown>, context: ToolExecutionContext): Promise<ToolResult> {
-    const baseUrl = (context as any).fixtureBaseUrl as string | undefined;
+    const baseUrl = context.fixtureBaseUrl;
     if (!baseUrl) {
       return { success: false, error: 'No fixture baseUrl configured', durationMs: 0 };
     }
@@ -98,7 +98,7 @@ export const fixtureResetTool: ToolDefinition = {
   risk: 'high-impact',
   capabilities: ['fixture', 'mutation'],
   async execute(_args: Record<string, unknown>, context: ToolExecutionContext): Promise<ToolResult> {
-    const baseUrl = (context as any).fixtureBaseUrl as string | undefined;
+    const baseUrl = context.fixtureBaseUrl;
     if (!baseUrl) {
       return { success: false, error: 'No fixture baseUrl configured', durationMs: 0 };
     }

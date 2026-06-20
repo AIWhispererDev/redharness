@@ -57,10 +57,18 @@ export async function executeCleanup(
       case 'fixture_reset':
         details.push('Calling fixture reset endpoint...');
         if (options.fixtureResetEndpoint) {
-          // In production: would make HTTP call to reset endpoint
+          const response = await fetch(options.fixtureResetEndpoint, {
+            method: 'POST',
+            headers: options.fixtureResetToken
+              ? { Authorization: `Bearer ${options.fixtureResetToken}` }
+              : undefined,
+          });
+          if (!response.ok) {
+            throw new Error(`Fixture reset failed with HTTP ${response.status}`);
+          }
           details.push(`Reset triggered: ${options.fixtureResetEndpoint}`);
         } else {
-          details.push('No fixture reset endpoint configured — simulating clean reset');
+          throw new Error('No fixture reset endpoint configured');
         }
         details.push('Fixture state restored to baseline');
         break;

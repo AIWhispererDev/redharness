@@ -7,6 +7,7 @@
  */
 
 import type { AttackDefinition, OwaspCategory } from './redteamTypes.js';
+import { getInitialReleaseCategories } from './owaspMapping.js';
 
 // ---------------------------------------------------------------------------
 // Attack Registry
@@ -58,6 +59,16 @@ export class AttackRegistry {
   /** Filter by environment safety. */
   getSafeForProduction(): AttackDefinition[] {
     return this.getAll().filter((a) => a.safeForProduction !== false);
+  }
+
+  /** Every executable attack mapped to an OWASP category required for release. */
+  getRequiredReleaseAttacks(): AttackDefinition[] {
+    const required = new Set(
+      getInitialReleaseCategories().map((category) => category.id),
+    );
+    return this.getSafeForProduction().filter(
+      (attack) => required.has(attack.category),
+    );
   }
 }
 
