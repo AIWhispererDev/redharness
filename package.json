@@ -1,18 +1,31 @@
 {
   "name": "qa-harness",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "General QA, regression, and safe security/pentest harness with app-specific QA packs",
   "scripts": {
+    "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "dev": "tsx src/cli.ts",
+    "qa": "tsx src/cli.ts",
+    "build": "tsc --project tsconfig.build.json",
     "save-auth": "tsx src/saveAuth.ts",
     "save-auth-cdp": "tsx src/saveAuthFromCdp.ts"
   },
-  "keywords": [],
+  "keywords": ["qa", "testing", "regression", "security", "pentest"],
   "author": "",
   "license": "ISC",
   "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/user/qa-harness.git"
+  },
+  "bugs": {
+    "url": "https://github.com/user/qa-harness/issues"
+  },
+  "homepage": "https://github.com/user/qa-harness#readme",
   "bin": {
     "qa-harness": "./src/cli.ts"
   },
