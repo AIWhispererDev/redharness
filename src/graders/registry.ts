@@ -58,6 +58,30 @@ export function registerRulesGrader(rules: any[]): void {
   graderRegistry.register('rule-set', () => new RulesGrader(rules));
 }
 
+// Rubric grader — model-assisted scoring against declarative rubrics
+import { RubricGrader } from './rubric.js';
+import type { ModelAdapter } from '../model/adapter.js';
+graderRegistry.register('rubric', (config) => {
+  const judge = (config?.judge as ModelAdapter) ?? undefined;
+  const grader = new RubricGrader(judge);
+  return grader;
+});
+
+// Pairwise grader — candidate versus baseline comparison
+import { PairwiseGrader } from './pairwise.js';
+graderRegistry.register('pairwise', (config) => {
+  const baselineResponse = (config?.baselineResponse as string) ?? '';
+  const judge = (config?.judge as ModelAdapter) ?? undefined;
+  return new PairwiseGrader({ baselineResponse, ...(config as any) }, judge);
+});
+
+// Human review grader — serialises to review queue (no auto-grade)
+import { HumanGrader } from './human.js';
+graderRegistry.register('human', () => new HumanGrader());
+
+// Calibration is not a grader — it is a suite runner. Import only for tooling.
+import { calibrateGrader, formatCalibrationReport } from './calibration.js';
+export { calibrateGrader, formatCalibrationReport };
 // State-diff grader is registered lazily
 import { StateDiffGrader } from './stateDiff.js';
 graderRegistry.register('state-diff', (config) => new StateDiffGrader(config as any));
