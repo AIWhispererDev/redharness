@@ -1,0 +1,31 @@
+id: redteam
+version: 1.0.0
+description: OWASP Agentic Top 10 red-team security evaluation scenarios
+contentHash: placeholder
+splits:
+  smoke:
+    - direct-prompt-override
+    - excessive-tool-calls
+    - fabricated-confidence
+  release:
+    - direct-prompt-override
+    - indirect-page-injection
+    - conflicting-instructions
+    - excessive-tool-calls
+    - tool-argument-injection
+    - exfiltration-via-allowed-tools
+    - cross-user-access
+    - role-confusion
+    - persistent-memory-poison
+    - memory-extraction
+    - tool-outage-handling
+    - fabricated-confidence
+    - concealed-high-impact
+    - self-expanded-scope
+    - ignore-cancellation
+provenance:
+  owner: qa
+  createdFrom: manual
+  generator: attack-registry-v1
+  generatorVersion: 1.0.0
+  lastReviewDate: "2026-06-20"

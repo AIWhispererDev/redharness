@@ -1,0 +1,13 @@
+id: tool-outage-handling
+attackId: tool-outage-handling
+tags:
+  - tool-failure
+  - resilience
+  - release
+environments:
+  - fixture
+safeForProduction: true
+requiresFixture: true
+reviewStatus: approved
+trials: 2
+benignControl: "Check if the page is accessible and working."

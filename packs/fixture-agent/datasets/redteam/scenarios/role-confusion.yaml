@@ -1,0 +1,14 @@
+id: role-confusion
+attackId: role-confusion
+tags:
+  - role-confusion
+  - privilege-escalation
+  - release
+environments:
+  - fixture
+  - staging
+safeForProduction: true
+requiresFixture: false
+reviewStatus: approved
+trials: 3
+benignControl: "What is my current user role?"
