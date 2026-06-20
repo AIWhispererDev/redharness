@@ -9,6 +9,9 @@ import type { Grader } from '../graders/grader.js';
 import type { ExecutionStatus } from '../core/status.js';
 import type { ReliabilityReport } from '../metrics/reliability.js';
 import { computeReliability } from '../metrics/reliability.js';
+import type { AgentTrialResult } from './agentActor.js';
+import { runAgentTrial } from './agentActor.js';
+import type { AgentActorConfig } from './schema.js';
 
 export type TrialResult = {
   trial: number;
@@ -79,9 +82,55 @@ export async function runScenario(
     let trialError: string | undefined;
     let beforeState: Record<string, unknown> = {};
     let afterState: Record<string, unknown> = {};
+    let agentTrial: AgentTrialResult | undefined;
 
     try {
-      if (scenario.target.kind === 'fixture') {
+      // Agent actor: delegate to AgentRuntime
+      if (scenario.actor.kind === 'agent') {
+        agentTrial = await runAgentTrial({
+          scenario,
+          trial: t,
+          baseUrl: options.baseUrl,
+          agentConfig: scenario.actor.config as AgentActorConfig | undefined,
+        });
+
+        trialStatus = agentTrial.status;
+        trialError = agentTrial.error;
+
+        if (agentTrial.evidence.beforeState) {
+          beforeState = agentTrial.evidence.beforeState;
+        }
+        if (agentTrial.evidence.afterState) {
+          afterState = agentTrial.evidence.afterState;
+        }
+
+        // Tool calls from agent trial
+        for (const tc of agentTrial.evidence.toolSequence) {
+          toolCalls.push(tc.tool);
+        }
+
+        // Evaluate assertions against after-state
+        for (const assertion of scenario.expected) {
+          const result = await evaluateAgentAssertion(assertion, afterState, captures);
+          assertions.push({
+            name: assertion.assertion,
+            passed: result.passed,
+            message: result.message,
+          });
+          if (!result.passed) trialStatus = 'failed';
+        }
+
+        // Capture pageText from run result final message
+        if (agentTrial.evidence.runResult?.messages?.length) {
+          const lastMsg = agentTrial.evidence.runResult.messages[agentTrial.evidence.runResult.messages.length - 1];
+          pageText = lastMsg.content ?? '';
+        }
+
+        // Cleanup
+        if (scenario.cleanup?.strategy === 'reset-session') {
+          await fetch(`${options.baseUrl}/reset`, { method: 'POST' }).catch(() => {});
+        }
+      } else if (scenario.target.kind === 'fixture') {
         // Fixture target: use HTTP directly (no browser needed)
         const setupActions = scenario.setup ?? [];
         for (const action of setupActions) {
@@ -188,15 +237,26 @@ export async function runScenario(
         const graderDef = scenario.graders.find((g) => g.id === grader.id);
         if (!graderDef) continue;
 
+        // Augment context with agent evidence when available
+        const agentContext: Record<string, unknown> = {};
+        if (agentTrial) {
+          agentContext.agentTrial = agentTrial;
+          agentContext.agentToolSequence = agentTrial.evidence.toolSequence;
+          agentContext.agentConfigHash = agentTrial.evidence.agentConfigHash;
+          agentContext.scenarioHash = agentTrial.evidence.scenarioHash;
+          agentContext.providerMode = agentTrial.evidence.providerMode;
+        }
+
         const gradeInput: GradingInput = {
           response: pageText,
-          target: graderDef.target ?? 'page_text',
+          target: graderDef.target ?? (agentTrial ? 'agent_run' : 'page_text'),
           context: {
             scenarioId: scenario.id,
             trial: t,
             beforeState,
             afterState,
             toolCalls,
+            ...agentContext,
           },
         };
 
@@ -236,6 +296,12 @@ export async function runScenario(
         afterState,
         toolCalls,
         grades,
+        agentTrial: agentTrial ? {
+          status: agentTrial.status,
+          toolSequence: agentTrial.evidence.toolSequence,
+          agentConfigHash: agentTrial.evidence.agentConfigHash,
+          scenarioHash: agentTrial.evidence.scenarioHash,
+        } : undefined,
       }, null, 2), 'utf8');
       evidence.push(evidencePath);
     }
@@ -386,4 +452,43 @@ function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
     if (acc && typeof acc === 'object') return (acc as Record<string, unknown>)[key];
     return undefined;
   }, obj);
+}
+
+// ---------------------------------------------------------------------------
+// Agent assertion evaluation
+// ---------------------------------------------------------------------------
+
+/** Evaluate a scenario assertion against agent trial state snapshots. */
+async function evaluateAgentAssertion(
+  assertion: import('./schema.js').ScenarioAssertion,
+  afterState: Record<string, unknown>,
+  captures: CaptureStore,
+): Promise<{ passed: boolean; message: string }> {
+  switch (assertion.assertion) {
+    case 'state_equals': {
+      const actual = getNestedValue(afterState, assertion.path);
+      const passed = JSON.stringify(actual) === JSON.stringify(assertion.expected);
+      return {
+        passed,
+        message: passed
+          ? `Agent state at "${assertion.path}" equals expected`
+          : `Agent state at "${assertion.path}": expected ${JSON.stringify(assertion.expected)}, got ${JSON.stringify(actual)}`,
+      };
+    }
+
+    case 'text_present': {
+      // Check after state for text presence
+      const stateStr = JSON.stringify(afterState);
+      const passed = stateStr.includes(assertion.text);
+      return {
+        passed,
+        message: passed
+          ? `Text "${assertion.text}" found in agent state`
+          : `Text "${assertion.text}" not found in agent state`,
+      };
+    }
+
+    default:
+      return { passed: false, message: `Assertion "${assertion.assertion}" not supported for agent targets` };
+  }
 }
