@@ -6,6 +6,16 @@ target:
   kind: fixture
   route: /api/counter
 trials: 5
+graders:
+  - id: trajectory
+    type: trajectory
+trajectory:
+  required:
+    - tool: http_get
+  forbidden:
+    - tool: delete_file
+  maxToolCalls: 3
+  allowEquivalentPaths: true
 actor:
   kind: scripted
 steps:

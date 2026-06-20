@@ -32,9 +32,8 @@ npm test
 Current verified test count at time of writing:
 
 ```text
-30+ test files
-118+ tests
-31 test files, 118 tests
+42 test files
+238+ tests
 ```
 
 ---
@@ -603,8 +602,8 @@ Minor UX/form validation
 The core harness is in an active development state with the following baseline:
 
 ```text
-TypeScript: 116 files, 0 errors
-Tests:      31 files, 118 tests passed
+TypeScript: 95 source files, 45 test files
+Tests:      42 files, 238+ tests passed
 Suites:     18 registered suites
 ```
 

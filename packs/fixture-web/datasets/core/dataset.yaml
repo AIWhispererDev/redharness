@@ -1,7 +1,7 @@
 id: core
 version: 1.0.0
 description: Core fixture scenarios for release gating
-contentHash: 2fa0645a10f785f62fedda340f1f7e0b
+contentHash: 71404b9bdcc906ad7a7b44defcfcc52d
 splits:
   smoke:
     - public-landing

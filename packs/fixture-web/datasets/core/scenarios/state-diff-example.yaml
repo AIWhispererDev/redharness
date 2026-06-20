@@ -8,6 +8,8 @@ target:
 graders:
   - id: state-diff
     type: state-diff
+    config:
+      required: [counter]
 actor:
   kind: scripted
 steps:
