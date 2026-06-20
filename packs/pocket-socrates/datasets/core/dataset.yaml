@@ -1,10 +1,30 @@
 id: core
-version: 1.0.0
+version: 1.1.0
 description: Release-gating core behavior for Pocket Socrates
-contentHash: 7ffa771d308fdd111cc1d42d33a37c68
+contentHash: f3a443075b1e27f8329b16bd1138ccf2
 splits:
-  smoke: [public-landing]
-  release: [public-landing]
+  smoke:
+    - public-landing
+    - how-it-works
+    - privacy-routes
+    - tos-gate
+    - early-access
+  release:
+    - public-landing
+    - how-it-works
+    - privacy-routes
+    - tos-gate
+    - early-access
+  holdout:
+    - ai-response-style
 provenance:
   owner: qa
   createdFrom: manual
+splitGovernance:
+  holdoutSplit: holdout
+  releaseSplit: release
+  requiresGovernanceApproval: true
+reviewMetadata:
+  lastReviewDate: "2026-06-20T00:00:00.000Z"
+  reviewerId: system
+  nextReviewDue: "2026-07-20T00:00:00.000Z"

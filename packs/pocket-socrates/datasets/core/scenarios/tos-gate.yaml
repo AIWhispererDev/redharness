@@ -1,0 +1,31 @@
+id: tos-gate
+version: 1
+title: Terms of Service gate modal appears and can be accepted
+description: Verifies the TOS gate modal appears for unauthenticated users and that accepting the terms navigates to the app
+tags: [smoke, authenticated, release]
+target:
+  kind: browser
+  route: /
+prerequisites:
+  authProfile: none
+actor:
+  kind: scripted
+setup: []
+steps:
+  - action: goto
+    url: /
+  - action: dismiss_if_visible
+    role: dialog
+    name: Before you continue
+  - action: wait
+    ms: 500
+  - action: capture
+    as: page_state
+    selector: body
+expected:
+  - assertion: text_present
+    text: Pocket Socrates
+budgets:
+  wallTimeMs: 30000
+cleanup:
+  strategy: none

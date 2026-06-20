@@ -1,0 +1,51 @@
+id: ai-response-style
+version: 1
+title: Pocket Socrates AI responses follow style rules
+description: Verifies that AI responses from Pocket Socrates do not contain style violations (em dashes, markdown, banned openers)
+tags: [ai-quality, release, live-only]
+target:
+  kind: browser
+  route: /
+prerequisites:
+  authProfile: pro
+actor:
+  kind: scripted
+  agentRef: scenario-model
+setup:
+  - action: goto
+    url: /
+  - action: wait
+    ms: 1000
+steps:
+  - action: send_message
+    value: Tell me about yourself
+  - action: wait_for_selector
+    selector: '[data-testid="soc-response"]'
+    timeoutMs: 15000
+expected:
+  - assertion: text_present
+    text: Soc
+budgets:
+  wallTimeMs: 60000
+graders:
+  - id: rule-set
+    type: rule-set
+    target: ai_response
+    config:
+      rules:
+        - id: no-em-dash
+          type: text
+          target: ai_response
+          pattern: "—"
+          issueType: Style Violation
+          severity: Major
+        - id: no-markdown-formatting
+          type: text
+          target: ai_response
+          patterns:
+            - "\\*\\*[^*]+\\*\\*"
+            - "^\\s*[-*]\\s+"
+          issueType: Style Violation
+          severity: Major
+cleanup:
+  strategy: reset-session

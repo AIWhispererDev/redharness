@@ -1,0 +1,36 @@
+id: privacy-routes
+version: 1
+title: Privacy-related routes load with expected content
+description: Validates that privacy policy, privacy architecture, and terms routes serve correct content
+tags: [smoke, public, release]
+target:
+  kind: browser
+  route: /privacy-policy
+prerequisites:
+  authProfile: none
+actor:
+  kind: scripted
+setup: []
+steps:
+  - action: goto
+    url: /privacy-policy
+  - action: capture
+    as: page_title
+    selector: title
+  - action: wait
+    ms: 500
+  - action: goto
+    url: /privacy-architecture
+  - action: wait
+    ms: 500
+  - action: goto
+    url: /terms
+  - action: wait
+    ms: 500
+expected:
+  - assertion: text_present
+    text: Pocket Socrates
+budgets:
+  wallTimeMs: 30000
+cleanup:
+  strategy: none

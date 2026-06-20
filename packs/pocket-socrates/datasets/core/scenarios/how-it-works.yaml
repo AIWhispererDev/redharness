@@ -1,0 +1,32 @@
+id: how-it-works
+version: 1
+title: How It Works page loads and shows expected content
+description: Validates the How It Works informational page
+tags: [smoke, public, release]
+target:
+  kind: browser
+  route: /how-it-works
+prerequisites:
+  authProfile: none
+actor:
+  kind: scripted
+setup: []
+steps:
+  - action: goto
+    url: /how-it-works
+  - action: capture
+    as: page_title
+    selector: title
+  - action: assert_text
+    value: How It Works
+  - action: assert_text
+    value: How to use Pocket Soc
+expected:
+  - assertion: text_present
+    text: How to use Pocket Soc
+  - assertion: text_present
+    text: Your Mind Map
+budgets:
+  wallTimeMs: 15000
+cleanup:
+  strategy: none

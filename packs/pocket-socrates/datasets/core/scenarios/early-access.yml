@@ -1,0 +1,32 @@
+id: early-access
+version: 1
+title: Early access page shows invite gate and TOS acceptance
+description: Validates that the early-access page requires invite code and TOS acceptance before proceeding
+tags: [smoke, authenticated, release]
+target:
+  kind: browser
+  route: /early-access
+prerequisites:
+  authProfile: none
+actor:
+  kind: scripted
+setup: []
+steps:
+  - action: goto
+    url: /early-access
+  - action: assert_visible
+    role: heading
+    name: Before you continue
+  - action: assert_text
+    value: Enter your invite code
+  - action: assert_text
+    value: Please read and accept both documents
+expected:
+  - assertion: text_present
+    text: Enter your invite code
+  - assertion: text_present
+    text: Before you continue
+budgets:
+  wallTimeMs: 15000
+cleanup:
+  strategy: none
