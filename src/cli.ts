@@ -508,8 +508,7 @@ program
       const pack = await loadPackFromDir(defaultPackDir(packId));
       if (!pack.baseUrl) throw new Error(`Pack ${packId} has no baseUrl`);
       const { AgentRuntime } = await import('./agent/runtime.js');
-      const { FakeModelAdapter } = await import('./agent/modelAdapter.js');
-      const { ReplayAdapter } = await import('./agent/replayAdapter.js');
+      const { createAdapter } = await import('./agent/modelAdapters/factory.js');
       const { createExploratoryQaIntent } = await import('./agent/intent.js');
       const { toolRegistry: defaultRegistry } = await import('./agent/toolRegistry.js');
       const { httpGetTool, httpPostTool } = await import('./agent/tools/httpTools.js');
@@ -532,17 +531,31 @@ program
 
       const runId = options.runId ?? `agent-${Date.now()}`;
 
-      // Choose adapter: replay file path or fake
+      // Choose adapter via factory: supports 'fake', 'replay', 'openai', 'anthropic', 'google'
+      const provider = options.provider ?? 'fake';
       let modelAdapter: any;
-      if (options.replay) {
+      if (provider === 'replay' && options.replay) {
         const replayContent = await readFile(options.replay, 'utf8');
         const replayEntries = JSON.parse(replayContent);
-        modelAdapter = new ReplayAdapter({ entries: replayEntries, strict: false });
-      } else {
-        modelAdapter = new FakeModelAdapter({
-          content: options.reply ?? 'Agent run completed.',
-          toolCalls: options.toolCalls ? JSON.parse(options.toolCalls) : undefined,
+        modelAdapter = createAdapter({ provider: 'replay', replayEntries });
+      } else if (provider === 'replay') {
+        throw new Error('--replay <file> is required when using --provider replay');
+      } else if (provider === 'fake') {
+        modelAdapter = createAdapter({
+          provider: 'fake',
+          fakeConfig: {
+            content: options.reply ?? 'Agent run completed.',
+            toolCalls: options.toolCalls ? JSON.parse(options.toolCalls) : undefined,
+          },
         });
+      } else {
+        // Live provider (openai, anthropic, google)
+        // Optionally wrap with recording for replay export
+        modelAdapter = createAdapter({
+          provider,
+          record: true,
+        });
+        console.error(`Using live provider: ${provider} — responses will be recorded for potential replay.`);
       }
 
       const runtime = new AgentRuntime({
