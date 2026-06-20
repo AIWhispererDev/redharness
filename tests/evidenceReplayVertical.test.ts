@@ -71,9 +71,6 @@ describe('Evidence/replay vertical slice', () => {
     const context = await browser.newContext();
     const page = await context.newPage();
 
-    // Start Playwright built-in tracing for trace.zip
-    await context.tracing.start({ screenshots: true, snapshots: true });
-
     const inst = new BrowserInstrumentation(traceWriter, store, runDir);
     await inst.instrument(context, page);
 
@@ -97,25 +94,10 @@ describe('Evidence/replay vertical slice', () => {
     expect(screenshotArtifacts.length).toBeGreaterThanOrEqual(1);
     expect(screenshotArtifacts[0].bytes).toBeGreaterThan(0);
 
-    // Stop Playwright tracing — captureEvidence should have stopped it.
-    // Restart and stop ourselves to ensure trace.zip lands.
-    // (captureEvidence stops tracing implicitly; let's do another for assurance)
-    await context.tracing.start({ screenshots: true, snapshots: true }).catch(() => {});
-    const traceDir2 = join(runDir, 'traces');
-    await mkdir(traceDir2, { recursive: true }).catch(() => {});
-    await context.tracing.stop({ path: join(traceDir2, 'trace.zip') }).catch(() => {});
-    const traceExist = existsSync(join(traceDir2, 'trace.zip'));
-
-    // Either captureEvidence or our manual stop produced a trace.zip
-    // Check the store for playwright-trace artifacts
     const traceArtifacts = store.getArtifacts().filter((a) => a.kind === 'playwright-trace');
-    // If captureEvidence didn't persist the trace, do it now
-    if (traceExist && traceArtifacts.length === 0) {
-      await store.copy(join(traceDir2, 'trace.zip'), 'playwright-trace', 'trace.zip', {
-        traceId: traceWriter.getTraceId(),
-        subDir: 'browser-evidence',
-      });
-    }
+    expect(traceArtifacts).toHaveLength(1);
+    expect(existsSync(join(runDir, traceArtifacts[0].relativePath))).toBe(true);
+    expect(statSync(join(runDir, traceArtifacts[0].relativePath)).size).toBeGreaterThan(0);
 
     // Verify action log
     const actionLog = inst.getActionLog();
@@ -187,32 +169,44 @@ describe('Evidence/replay vertical slice', () => {
     await mkdir(runDir, { recursive: true });
     const store = new ArtifactStore(runDir, 'run-http-defect');
 
-    // Planted defect:  GET /api/users/user-2 should return Bob's profile
-    // We capture v1 behavior as expected.
+    // Planted defect: v2 accepts an empty form submission that v1 rejects.
     const httpCapture = {
-      method: 'GET' as const,
-      url: `${v1Fixture.baseUrl}/api/users/user-2`,
-      headers: { accept: 'application/json', host: '127.0.0.1' },
+      method: 'POST' as const,
+      url: `${v2Fixture.baseUrl}/submit`,
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        host: '127.0.0.1',
+      },
+      body: 'name=&email=',
       status: 200,
-      assertion: '"Bob"',
+      assertion: 'Thank You',
     };
 
-    // Verify the defect is real before writing the packet
-    const verifyResp = await fetch(httpCapture.url, { headers: httpCapture.headers as Record<string, string> });
-    const verifyBody = await verifyResp.text();
+    const expectedResp = await fetch(`${v1Fixture.baseUrl}/submit`, {
+      method: 'POST',
+      headers: httpCapture.headers,
+      body: httpCapture.body,
+    });
+    expect(expectedResp.status).toBe(400);
+
+    const verifyResp = await fetch(httpCapture.url, {
+      method: httpCapture.method,
+      headers: httpCapture.headers,
+      body: httpCapture.body,
+    });
     expect(verifyResp.status).toBe(200);
-    expect(verifyBody).toContain('Bob');
+    expect(await verifyResp.text()).toContain('Thank You');
 
     const result = await writeFindingPacketV2({
       packId: 'test-pack',
-      title: 'User endpoint returns Bob profile on v1',
-      severity: 'info',
-      category: 'api-contract',
+      title: 'V2 accepts an empty form submission',
+      severity: 'medium',
+      category: 'validation',
       suiteId: 'vertical-slice',
-      check: 'user-profile',
-      expectedState: 'GET /api/users/user-2 returns 200 with Bob profile',
-      actualState: 'GET /api/users/user-2 returns 200 with Bob profile',
-      steps: ['GET /api/users/user-2', 'Verify response contains Bob'],
+      check: 'empty-form-validation',
+      expectedState: 'POST /submit with empty fields returns 400 Validation Error',
+      actualState: 'POST /submit with empty fields returns 200 Thank You',
+      steps: ['POST empty name and email fields to /submit', 'Observe the submission is accepted'],
       store,
       attemptId: 'attempt-1',
       traceId: 'trace-http-defect',
