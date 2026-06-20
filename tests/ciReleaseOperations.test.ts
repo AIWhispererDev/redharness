@@ -11,11 +11,9 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { existsSync, mkdtempSync, readdirSync } from 'node:fs';
-import { mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdir, writeFile, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { createFixtureApp } from './fixtures/web-app/index.js';
-import { startFixtureWithHealthCheck, type FixtureHandle } from './fixtures/fixtureLifecycle.js';
+import { join, resolve } from 'node:path';
 import { generateJUnitXml } from '../src/reporters/junit.js';
 import { generateSarifReport } from '../src/reporters/sarif.js';
 import { generateGitHubStepSummary, generateGitHubAnnotations } from '../src/reporters/github.js';
@@ -24,21 +22,22 @@ import { compareRuns, formatComparisonSummary, validateDatasetCompatibility } fr
 import type { RunManifest } from '../src/core/runTypes.js';
 import type { CandidateRunResult } from '../src/experiments/experimentTypes.js';
 import type { TraceSpan } from '../src/trace/traceTypes.js';
+import {
+  releaseProfilePassed,
+  runReleaseProfile,
+} from '../src/operations/releaseProfile.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Setup
 // ─────────────────────────────────────────────────────────────────────────────
 
-let fixture: FixtureHandle;
 let tmpDir: string;
 
 beforeAll(async () => {
   tmpDir = mkdtempSync(join(tmpdir(), 'ci-release-'));
-  fixture = await startFixtureWithHealthCheck(() => createFixtureApp(false));
 }, 15000);
 
 afterAll(async () => {
-  await fixture.stop();
   await rm(tmpDir, { recursive: true, force: true });
 }, 10000);
 
@@ -47,29 +46,50 @@ afterAll(async () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('Release profile', () => {
-  it('creates a deterministic fixture release run manifest', () => {
-    const runId = `release-${Date.now()}`;
-    const now = new Date().toISOString();
-    const manifest: RunManifest = {
-      schemaVersion: '1',
-      runId,
+  it('runs the coordinator against the controlled fixture and writes every release report', async () => {
+    const result = await runReleaseProfile({
+      packDir: resolve('packs/fixture-web'),
       packId: 'fixture-web',
       profile: 'release',
-      status: 'passed',
-      startedAt: now,
-      endedAt: new Date(Date.now() + 5000).toISOString(),
-      durationMs: 5000,
-      source: 'ci' as const,
-      environment: { nodeVersion: '22', platform: 'linux', ci: true },
-      selection: { suites: [], tags: ['release'], excludedTags: [] },
-      policy: { retryErrors: 0, maxWorkers: 3 },
-      suiteResults: [
-        { suiteId: 'health-check', title: 'Health Check', status: 'passed', requirement: 'required', startedAt: now, endedAt: now, durationMs: 200, attemptCount: 1 },
-        { suiteId: 'dashboard-auth', title: 'Dashboard Auth', status: 'passed', requirement: 'required', startedAt: now, endedAt: now, durationMs: 500, attemptCount: 1 },
-      ],
-    };
-    expect(manifest.profile).toBe('release');
-    expect(manifest.source).toBe('ci');
+      outputDir: tmpDir,
+      runId: 'fixture-web-release',
+      startFixture: true,
+    });
+
+    expect(result.manifest.profile).toBe('release');
+    expect(result.manifest.source).toBe('ci');
+    expect(result.manifest.status).toBe('passed');
+    expect(result.manifest.suiteResults.map((suite) => suite.suiteId)).toEqual([
+      'public-routes',
+    ]);
+    expect(releaseProfilePassed(result)).toBe(true);
+    expect(JSON.parse(await readFile(result.reportPaths.json, 'utf8')).runId)
+      .toBe('fixture-web-release');
+    expect(await readFile(result.reportPaths.markdown, 'utf8'))
+      .toContain('QA Harness Run: fixture-web');
+    expect(await readFile(result.reportPaths.junit, 'utf8'))
+      .toContain('<testsuites');
+    expect(JSON.parse(await readFile(result.reportPaths.sarif, 'utf8')).version)
+      .toBe('2.1.0');
+  }, 15000);
+
+  it('writes reports but fails the gate when the real release suite fails', async () => {
+    const result = await runReleaseProfile({
+      packDir: resolve('packs/fixture-web'),
+      packId: 'fixture-web',
+      profile: 'release',
+      outputDir: tmpDir,
+      runId: 'fixture-web-release-failure',
+      baseUrl: 'http://127.0.0.1:1',
+    });
+
+    expect(result.manifest.status).toBe('failed');
+    expect(result.manifest.suiteResults[0].status).toBe('failed');
+    expect(releaseProfilePassed(result)).toBe(false);
+    expect(existsSync(result.reportPaths.json)).toBe(true);
+    expect(existsSync(result.reportPaths.markdown)).toBe(true);
+    expect(existsSync(result.reportPaths.junit)).toBe(true);
+    expect(existsSync(result.reportPaths.sarif)).toBe(true);
   });
 });
 

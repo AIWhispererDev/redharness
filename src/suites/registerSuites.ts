@@ -201,12 +201,13 @@ export function registerAllSuites(): void {
       id: 'public-routes',
       title: 'Public Routes',
       description: 'HTTP GET pack-defined public routes and verify title + text content.',
-      tags: ['smoke', 'public', 'release'],
+      tags: ['smoke', 'public', 'release', 'fixture-release'],
       requirement: 'required',
       estimatedDuration: 'short',
       requires: ['baseUrl'],
       async run(context: SuiteContext): Promise<SuiteResult> {
-        const pack = await loadPackFromDir(context.packDir);
+        const loadedPack = await loadPackFromDir(context.packDir);
+        const pack = { ...loadedPack, baseUrl: context.baseUrl ?? loadedPack.baseUrl };
         const startedAt = new Date().toISOString();
         const startMs = Date.now();
         try {

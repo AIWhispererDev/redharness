@@ -30,6 +30,10 @@ import { registerAllSuites } from './suites/registerSuites.js';
 import { registry, RunCoordinator, statusLabel, statusToOk, evaluateRunPolicy, evaluateSuitePolicy, loadManifest, getResumeTargets, computeConfigHash } from './core/index.js';
 import type { ProfileConfig } from './types.js';
 import type { RunManifest, SuiteResultSummary } from './core/runTypes.js';
+import {
+  releaseProfilePassed,
+  runReleaseProfile,
+} from './operations/releaseProfile.js';
 
 const program = new Command();
 
@@ -279,6 +283,40 @@ program
     // Use policy evaluation for exit code (required skipped suites fail the run)
     const policyResult = evaluateRunPolicy(manifest.suiteResults);
     if (!policyResult.isPassing) {
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command('release-profile')
+  .argument('<pack>', 'pack id')
+  .option('--profile <name>', 'profile name', 'release')
+  .option('--output-dir <dir>', 'release artifact root', 'artifacts/release-profile')
+  .option('--run-id <id>', 'deterministic run identifier')
+  .option('--base-url <url>', 'target base URL')
+  .option('--fixture', 'start the controlled local release fixture')
+  .description('Run a deterministic coordinator-backed release profile and write CI reports')
+  .action(async (packId, options) => {
+    try {
+      const result = await runReleaseProfile({
+        packDir: defaultPackDir(packId),
+        packId,
+        profile: options.profile,
+        outputDir: options.outputDir,
+        runId: options.runId,
+        baseUrl: options.baseUrl,
+        startFixture: options.fixture,
+      });
+      console.log(`Release run: ${result.runDir}`);
+      console.log(`JSON: ${result.reportPaths.json}`);
+      console.log(`Markdown: ${result.reportPaths.markdown}`);
+      console.log(`JUnit: ${result.reportPaths.junit}`);
+      console.log(`SARIF: ${result.reportPaths.sarif}`);
+      if (!releaseProfilePassed(result)) process.exitCode = 1;
+    } catch (error) {
+      console.error(
+        `Release profile failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
       process.exitCode = 1;
     }
   });

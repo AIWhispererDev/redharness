@@ -9,6 +9,7 @@
     "qa": "tsx src/cli.ts",
     "build": "tsc --project tsconfig.build.json",
     "verify:built": "node dist/src/cli.js list pocket-socrates --json",
+    "release:ci": "tsx src/cli.ts release-profile fixture-web --fixture --profile release --run-id fixture-web-release --output-dir artifacts/release-profile",
     "verify": "npm run typecheck && npm test && npm run build && npm run verify:built",
     "save-auth": "tsx src/saveAuth.ts",
     "save-auth-cdp": "tsx src/saveAuthFromCdp.ts"

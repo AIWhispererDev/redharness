@@ -2,3 +2,27 @@ id: fixture-web
 name: Fixture Web
 type: fixture
 baseUrl: http://127.0.0.1:0
+issueTypes: []
+severities:
+  Blocker: Blocks release
+  Major: Major regression
+  Minor: Minor regression
+  Polish: Cosmetic issue
+tracks: {}
+reports: {}
+rules: []
+smoke:
+  publicRoutes:
+    - path: /
+      titleIncludes: Fixture Web
+      textIncludes:
+        - Welcome to Fixture Web
+    - path: /about
+      titleIncludes: Fixture Web
+      textIncludes:
+        - About Fixture Web
+        - Controlled release fixture
+profiles:
+  release:
+    includeTags:
+      - fixture-release
