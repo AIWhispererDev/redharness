@@ -1,7 +1,8 @@
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import YAML from 'yaml';
-import type { ScenarioDefinition } from './schema.js';
+import type { ScenarioDefinition, AgentActorConfig } from './schema.js';
+import { resolveAgentConfig, hashAgentConfig } from '../agents/loader.js';
 
 /**
  * Loads scenario definitions from a dataset directory.
@@ -69,5 +70,34 @@ export function validateScenario(s: ScenarioDefinition): string[] {
   if (s.setup !== undefined && !Array.isArray(s.setup)) errors.push('Scenario setup must be an array if provided');
   if (s.trials !== undefined && s.trials < 1) errors.push('trials must be >= 1');
   if (s.target.route && !s.target.route.startsWith('/')) errors.push('target.route must start with /');
+
+  // Agent actor validation
+  if (s.actor.kind === 'agent') {
+    if (!s.actor.config && !s.actor.agentRef) {
+      errors.push('Agent actor must specify either config or agentRef');
+    }
+    if (!s.agentGoal && (!s.steps || s.steps.length === 0)) {
+      errors.push('Agent actor should specify agentGoal or have steps defined');
+    }
+  }
+
   return errors;
+}
+
+/**
+ * Resolve agent configuration for a scenario.
+ * Returns the resolved agent config along with its content hash.
+ */
+export function resolveScenarioAgent(
+  scenario: ScenarioDefinition,
+): { config: AgentActorConfig; hash: string } | null {
+  if (scenario.actor.kind !== 'agent') return null;
+
+  const config = resolveAgentConfig(
+    scenario.actor.agentRef,
+    scenario.actor.config as AgentActorConfig | undefined,
+  );
+
+  const hash = hashAgentConfig(config);
+  return { config, hash };
 }

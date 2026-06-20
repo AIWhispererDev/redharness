@@ -1,0 +1,30 @@
+id: agent-read-file
+version: 1
+title: Agent reads a file from the fixture
+description: Agent with read tools fetches fixture state and reports file contents.
+tags: [smoke, agent, read]
+target:
+  kind: fixture
+  route: /
+actor:
+  kind: agent
+  agentRef: fixture-query
+agentGoal: Read the contents of /etc/config.json and /home/user/readme.md from the fixture and report what you found. Read fixture state to check your work.
+steps: []
+expected:
+  - assertion: state_equals
+    path: iterations
+    expected: 0
+graders:
+  - id: trajectory
+    type: trajectory
+trajectory:
+  required:
+    - tool: fixture_read_state
+  forbidden:
+    - tool: delete_file
+  maxToolCalls: 5
+  allowEquivalentPaths: true
+trials: 1
+cleanup:
+  strategy: reset-session

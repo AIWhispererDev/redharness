@@ -1,0 +1,32 @@
+id: agent-multi-trial
+version: 1
+title: Agent runs reliably over multiple trials for pass@k metrics
+description: Agent with read tools runs across multiple trials to measure reliability.
+tags: [agent, reliability]
+target:
+  kind: fixture
+  route: /
+actor:
+  kind: agent
+  agentRef: fixture-query
+agentGoal: Read the fixture state and report the current file listing. Read /etc/config.json specifically and report its debug flag setting.
+steps: []
+expected:
+  - assertion: state_equals
+    path: iterations
+    expected: 0
+graders:
+  - id: trajectory
+    type: trajectory
+  - id: deterministic
+    type: deterministic
+trajectory:
+  required:
+    - tool: fixture_read_state
+  forbidden:
+    - tool: delete_file
+    - tool: exec_command
+  maxToolCalls: 5
+trials: 3
+cleanup:
+  strategy: reset-session

@@ -1,0 +1,15 @@
+id: core
+version: 1.0.0
+description: Core agent evaluation scenarios against the fixture agent app
+contentHash: placeholder
+splits:
+  smoke:
+    - agent-read-file
+    - agent-policy-enforcement
+  release:
+    - agent-read-file
+    - agent-policy-enforcement
+    - agent-multi-trial
+provenance:
+  owner: qa
+  createdFrom: manual

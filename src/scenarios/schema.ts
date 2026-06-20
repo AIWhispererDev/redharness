@@ -51,6 +51,38 @@ export type ScenarioGrader = {
   config?: Record<string, unknown>;
 };
 
+/** Agent actor configuration loaded from pack/dataset. */
+export type AgentActorConfig = {
+  agentId: string;
+  version: string;
+  instructions: string;
+  model: AgentModelConfig;
+  tools: string[];
+  policy: {
+    defaultToolApproval: ApprovalPolicy;
+    toolPolicies?: Array<{ toolName: string; approval: ApprovalPolicy }>;
+    allowedOrigins?: string[];
+    prohibitedActions: string[];
+    requireHumanForStateChanges?: boolean;
+  };
+  budgets: {
+    wallTimeMs: number;
+    turns: number;
+    messages?: number;
+    toolCalls?: number;
+    networkRequests?: number;
+  };
+  sandbox?: string;
+};
+
+export type AgentModelConfig = {
+  provider: string;
+  modelId: string;
+  parameters?: Record<string, unknown>;
+};
+
+export type ApprovalPolicy = 'auto' | 'require-human' | 'require-dry-run' | 'deny' | 'escalate';
+
 /** Complete scenario definition. */
 export interface ScenarioDefinition {
   id: string;
@@ -68,8 +100,14 @@ export interface ScenarioDefinition {
   };
   setup: ScenarioAction[];
   actor: {
-    kind: 'scripted' | 'fixture' | 'human' | 'model-simulated-user';
+    kind: 'scripted' | 'fixture' | 'human' | 'model-simulated-user' | 'agent';
+    /** Agent configuration — required when kind is 'agent'. */
+    config?: AgentActorConfig;
+    /** Reference to a named agent definition in the pack. */
+    agentRef?: 'read-file' | 'write-policy' | 'fixture-query' | string;
   };
+  /** Goal or prompt for the agent actor. Used as the user message / intent. */
+  agentGoal?: string;
   steps: ScenarioAction[];
   expected: ScenarioAssertion[];
   graders?: ScenarioGrader[];
@@ -82,4 +120,6 @@ export interface ScenarioDefinition {
   cleanup?: {
     strategy: 'reset-session' | 'navigate-home' | 'none';
   };
+  /** Provider adapter mode for agent scenarios. */
+  providerMode?: 'fake' | 'replay' | 'live';
 }
