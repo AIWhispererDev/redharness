@@ -17,6 +17,7 @@ import { isRetryable } from './resultPolicy.js';
 import { saveManifest, computeConfigHash } from './resumeStore.js';
 import { TraceWriter } from '../trace/traceWriter.js';
 import { ArtifactStore } from '../artifacts/artifactStore.js';
+import { redactDeep } from '../trace/redaction.js';
 
 export type CoordinatorOptions = {
   packDir: string;
@@ -176,7 +177,7 @@ export class RunCoordinator {
       await mkdir(suiteDir, { recursive: true });
       await writeFile(
         path.join(suiteDir, 'summary.json'),
-        JSON.stringify(result, null, 2),
+        JSON.stringify(redactDeep(result).result, null, 2),
         'utf8',
       );
       // Write full result (with checks, artifacts, attempts) if available
@@ -184,7 +185,7 @@ export class RunCoordinator {
       if (full) {
         await writeFile(
           path.join(suiteDir, 'result.json'),
-          JSON.stringify(full, null, 2),
+          JSON.stringify(redactDeep(full).result, null, 2),
           'utf8',
         );
       }
@@ -336,6 +337,11 @@ export class RunCoordinator {
       const artifactStore = new ArtifactStore(
         firstAttemptDir,
         this.manifest.runId,
+        {
+          traceWriter: this.traceWriter,
+          parentSpanId: suiteSpanId,
+          attemptId,
+        },
       );
       const suiteContext: SuiteContext = {
         ...this.context,
@@ -345,6 +351,7 @@ export class RunCoordinator {
         spanId: suiteSpanId,
         attemptId,
         artifactStore,
+        traceWriter: this.traceWriter,
       };
       const runPromise: Promise<Outcome> = this.executeSuite(
         suite,
@@ -408,16 +415,10 @@ export class RunCoordinator {
         failed.add(suite.id);
         // The suite may not cooperate with cancellation, but evidence already
         // written by the time the bound fires is still flushed and indexed.
-        const partial = artifactStore.buildManifest({
+        await artifactStore.saveManifest(
           attemptId,
-          traceId: this.traceWriter.getTraceId(),
-        });
-        if (partial.artifacts.length > 0) {
-          await artifactStore.saveManifest(
-            attemptId,
-            this.traceWriter.getTraceId(),
-          );
-        }
+          this.traceWriter.getTraceId(),
+        );
       }
       const recorded = results[results.length - 1];
       this.traceWriter.endSpan(
@@ -512,22 +513,20 @@ export class RunCoordinator {
       path.join(baseCtx.outputDir ?? this.runDir, `attempt-${attemptNum}`);
     // Create attempt-scoped artifact store for this suite execution
     const store = baseCtx.artifactStore ??
-      new ArtifactStore(attemptDir(1), this.manifest.runId);
+      new ArtifactStore(attemptDir(1), this.manifest.runId, {
+        traceWriter: this.traceWriter,
+        parentSpanId: baseCtx.spanId,
+        attemptId: baseCtx.attemptId,
+      });
     const attemptId = baseCtx.attemptId ?? `${suite.id}:1`;
 
     /** Persist attempt evidence and flush trace. */
     const persistEvidence = async (attemptStore: ArtifactStore, persistedAttemptId: string): Promise<void> => {
       await this.traceWriter.flush();
-      const manifest = attemptStore.buildManifest({
-        attemptId: persistedAttemptId,
-        traceId: this.traceWriter.getTraceId(),
-      });
-      if (manifest.artifacts.length > 0) {
-        await attemptStore.saveManifest(
-          persistedAttemptId,
-          this.traceWriter.getTraceId(),
-        );
-      }
+      await attemptStore.saveManifest(
+        persistedAttemptId,
+        this.traceWriter.getTraceId(),
+      );
     };
 
     try {
@@ -565,6 +564,11 @@ export class RunCoordinator {
       const retryStore = new ArtifactStore(
         attemptDir(attempts),
         this.manifest.runId,
+        {
+          traceWriter: this.traceWriter,
+          parentSpanId: baseCtx.spanId,
+          attemptId: retryAttemptId,
+        },
       );
       const retryCtx: SuiteContext = { ...baseCtx, outputDir: attemptDir(attempts), artifactStore: retryStore, attemptId: retryAttemptId };
       try {

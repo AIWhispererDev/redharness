@@ -1,7 +1,8 @@
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { TraceSpan, TraceCorrelation, TraceEvent, JsonValue } from './traceTypes.js';
+import type { TraceSpan, TraceCorrelation, TraceEvent, JsonValue, RedactionEntry } from './traceTypes.js';
+import { redactDeep } from './redaction.js';
 
 /**
  * Manages trace spans within a single run directory.
@@ -9,6 +10,7 @@ import type { TraceSpan, TraceCorrelation, TraceEvent, JsonValue } from './trace
  */
 export class TraceWriter {
   private spans: TraceSpan[] = [];
+  private redactions: RedactionEntry[] = [];
   private dirty = false;
 
   constructor(
@@ -29,6 +31,7 @@ export class TraceWriter {
     attributes?: Record<string, JsonValue>;
   }): string {
     const spanId = randomUUID().replace(/-/g, '').slice(0, 16);
+    const attributes = this.redact(params.attributes ?? {}, `spans.${spanId}.attributes`);
     const span: TraceSpan = {
       traceId: this.traceId,
       spanId,
@@ -38,7 +41,7 @@ export class TraceWriter {
       kind: params.kind,
       startedAt: new Date().toISOString(),
       status: 'ok',
-      attributes: params.attributes ?? {},
+      attributes,
       events: [],
     };
     this.spans.push(span);
@@ -52,7 +55,9 @@ export class TraceWriter {
     if (!span) return;
     span.endedAt = new Date().toISOString();
     if (status) span.status = status;
-    if (attributes) Object.assign(span.attributes, attributes);
+    if (attributes) {
+      Object.assign(span.attributes, this.redact(attributes, `spans.${spanId}.attributes`));
+    }
     this.dirty = true;
   }
 
@@ -60,7 +65,14 @@ export class TraceWriter {
   addEvent(spanId: string, name: string, attributes?: Record<string, JsonValue>): void {
     const span = this.spans.find((s) => s.spanId === spanId);
     if (!span) return;
-    const event: TraceEvent = { name, timestamp: new Date().toISOString(), attributes: attributes ?? {} };
+    const event: TraceEvent = {
+      name,
+      timestamp: new Date().toISOString(),
+      attributes: this.redact(
+        attributes ?? {},
+        `spans.${spanId}.events.${span.events.length}.attributes`,
+      ),
+    };
     span.events.push(event);
     this.dirty = true;
   }
@@ -69,7 +81,8 @@ export class TraceWriter {
   setAttribute(spanId: string, key: string, value: JsonValue): void {
     const span = this.spans.find((s) => s.spanId === spanId);
     if (!span) return;
-    span.attributes[key] = value;
+    const redacted = this.redact({ [key]: value }, `spans.${spanId}.attributes`);
+    span.attributes[key] = redacted[key];
     this.dirty = true;
   }
 
@@ -115,5 +128,19 @@ export class TraceWriter {
   /** Get all spans currently in memory. */
   getSpans(): TraceSpan[] {
     return [...this.spans];
+  }
+
+  /** Get a snapshot of every automatic redaction applied to this trace. */
+  getRedactionSummary(): RedactionEntry[] {
+    return [...this.redactions];
+  }
+
+  private redact(
+    value: Record<string, JsonValue>,
+    pathPrefix: string,
+  ): Record<string, JsonValue> {
+    const { result, redactions } = redactDeep(value, undefined, pathPrefix);
+    this.redactions.push(...redactions);
+    return result as Record<string, JsonValue>;
   }
 }

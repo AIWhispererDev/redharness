@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import type { RunManifest, SuiteResult, RunConfigHash, SuiteResultSummary } from './runTypes.js';
 import type { ExecutionStatus } from './status.js';
+import { redactDeep } from '../trace/redaction.js';
 
 /**
  * Resume store manages persistent run manifests and supports resuming
@@ -35,9 +36,10 @@ export async function loadManifest(runDir: string): Promise<RunManifest | null> 
 /** Save a run manifest to a run directory. */
 export async function saveManifest(runDir: string, manifest: RunManifest): Promise<void> {
   await mkdir(runDir, { recursive: true });
+  const { result } = redactDeep(manifest);
   await writeFile(
     path.join(runDir, 'run.json'),
-    JSON.stringify(manifest, null, 2),
+    JSON.stringify(result, null, 2),
     'utf8',
   );
 }

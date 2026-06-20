@@ -2,7 +2,15 @@ import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { randomUUID } from 'node:crypto';
-import type { ArtifactRef, EvidenceManifest } from '../trace/traceTypes.js';
+import type { ArtifactRef, EvidenceManifest, RedactionEntry } from '../trace/traceTypes.js';
+import type { TraceWriter } from '../trace/traceWriter.js';
+import { redactDeep, redactText } from '../trace/redaction.js';
+
+export type ArtifactStoreTraceContext = {
+  traceWriter: TraceWriter;
+  parentSpanId?: string;
+  attemptId?: string;
+};
 
 /**
  * Artifact store: writes and tracks evidence files with integrity hashes.
@@ -12,10 +20,18 @@ import type { ArtifactRef, EvidenceManifest } from '../trace/traceTypes.js';
  */
 export class ArtifactStore {
   private artifacts: ArtifactRef[] = [];
+  private redactions: RedactionEntry[] = [];
+  private traceRedactionStart: number;
   private baseDir: string;
 
-  constructor(baseDir: string, private runId: string = '') {
+  constructor(
+    baseDir: string,
+    private runId: string = '',
+    private traceContext?: ArtifactStoreTraceContext,
+  ) {
     this.baseDir = path.resolve(baseDir);
+    this.traceRedactionStart =
+      traceContext?.traceWriter.getRedactionSummary().length ?? 0;
   }
 
   /** Absolute root used by this attempt-scoped store. */
@@ -34,7 +50,24 @@ export class ArtifactStore {
     redacted?: boolean;
     subDir?: string;
   }): Promise<ArtifactRef> {
-    const buf = typeof params.data === 'string' ? Buffer.from(params.data, 'utf8') : params.data;
+    const spanId = this.traceContext?.traceWriter.startSpan({
+      name: `artifact:${params.kind}`,
+      kind: 'artifact.write',
+      parentSpanId: params.spanId ?? this.traceContext?.parentSpanId,
+      attemptId: this.traceContext?.attemptId,
+      attributes: {
+        kind: params.kind,
+        filename: params.filename,
+        mediaType: params.mediaType ?? 'application/octet-stream',
+      },
+    });
+    const { data, redactions } = this.redactData(
+      params.data,
+      params.mediaType,
+      params.filename,
+    );
+    this.redactions.push(...redactions);
+    const buf = typeof data === 'string' ? Buffer.from(data, 'utf8') : data;
     const sha256 = createHash('sha256').update(buf).digest('hex');
     const id = randomUUID().replace(/-/g, '').slice(0, 16);
     const relDir = params.subDir ?? 'artifacts';
@@ -42,8 +75,17 @@ export class ArtifactStore {
     const relativePath = path.join(relDir, params.filename).replace(/\\/g, '/');
     const absPath = path.join(this.baseDir, relativePath);
 
-    await mkdir(path.dirname(absPath), { recursive: true });
-    await writeFile(absPath, buf);
+    try {
+      await mkdir(path.dirname(absPath), { recursive: true });
+      await writeFile(absPath, buf);
+    } catch (error) {
+      if (spanId) {
+        this.traceContext?.traceWriter.endSpan(spanId, 'error', {
+          error: String(error),
+        });
+      }
+      throw error;
+    }
 
     const ref: ArtifactRef = {
       id,
@@ -53,12 +95,21 @@ export class ArtifactStore {
       sha256,
       bytes: buf.length,
       createdAt: new Date().toISOString(),
-      traceId: params.traceId,
-      spanId: params.spanId,
-      redacted: params.redacted ?? false,
+      traceId: this.traceContext?.traceWriter.getTraceId() ?? params.traceId,
+      spanId: spanId ?? params.spanId,
+      redacted: (params.redacted ?? false) || redactions.length > 0,
     };
 
     this.artifacts.push(ref);
+    if (spanId) {
+      this.traceContext?.traceWriter.endSpan(spanId, 'ok', {
+        artifactId: id,
+        relativePath,
+        sha256,
+        bytes: buf.length,
+        redacted: ref.redacted,
+      });
+    }
     return ref;
   }
 
@@ -108,7 +159,12 @@ export class ArtifactStore {
       attemptId: params.attemptId,
       traceId: params.traceId,
       artifacts: [...this.artifacts],
-      redactionSummary: [],
+      redactionSummary: [
+        ...this.redactions,
+        ...(this.traceContext?.traceWriter.getRedactionSummary().slice(
+          this.traceRedactionStart,
+        ) ?? []),
+      ],
     };
   }
 
@@ -121,5 +177,30 @@ export class ArtifactStore {
   /** Get all tracked artifact refs. */
   getArtifacts(): ArtifactRef[] {
     return [...this.artifacts];
+  }
+
+  private redactData(
+    data: Buffer | string,
+    mediaType = 'application/octet-stream',
+    filename = '',
+  ): { data: Buffer | string; redactions: RedactionEntry[] } {
+    const textual = typeof data === 'string'
+      || mediaType.startsWith('text/')
+      || /json|xml|javascript|x-www-form-urlencoded/i.test(mediaType)
+      || /\.(json|jsonl|txt|log|md|html|xml|ya?ml|csv)$/i.test(filename);
+    if (!textual) return { data, redactions: [] };
+
+    const text = typeof data === 'string' ? data : data.toString('utf8');
+    if (/json/i.test(mediaType) || /\.jsonl?$/i.test(filename)) {
+      try {
+        const parsed = JSON.parse(text);
+        const { result, redactions } = redactDeep(parsed);
+        return { data: JSON.stringify(result, null, 2), redactions };
+      } catch {
+        // Malformed or JSONL content still receives text-pattern redaction.
+      }
+    }
+    const redacted = redactText(text);
+    return { data: redacted.result, redactions: redacted.redactions };
   }
 }

@@ -4,6 +4,7 @@ import type { FindingPacketV2, ReplaySpec, ArtifactRef, FindingLifecycleState } 
 import { compileBrowserSpec, compileHttpSpec, compileGuidedSpec } from './replay/replayCompiler.js';
 import { ArtifactStore } from './artifacts/artifactStore.js';
 import { randomUUID } from 'node:crypto';
+import { redactDeep } from './trace/redaction.js';
 
 // ---------------------------------------------------------------------------
 // Legacy v1 finding packet (preserved for backward compat)
@@ -172,48 +173,64 @@ export async function writeFindingPacketV2(input: FindingPacketV2Input): Promise
     reproductionCount: 1,
     environment: { packId: input.packId, baseUrl: input.baseUrl },
     evidenceManifest: manifest,
-    redactionSummary: [],
+    redactionSummary: manifest.redactionSummary,
     replaySpec,
     expectedState: input.expectedState,
     actualState: input.actualState,
     steps: input.steps,
   };
 
+  const packetRedaction = redactDeep(packet);
+  const persistedPacket = packetRedaction.result as FindingPacketV2;
+  const combinedRedactions = [
+    ...manifest.redactionSummary,
+    ...packetRedaction.redactions,
+  ].filter(
+    (entry, index, all) =>
+      all.findIndex(
+        (candidate) =>
+          candidate.fieldPath === entry.fieldPath
+          && candidate.ruleId === entry.ruleId,
+      ) === index,
+  );
+  persistedPacket.redactionSummary = combinedRedactions;
+  persistedPacket.evidenceManifest.redactionSummary = combinedRedactions;
+
   // Write packet JSON
-  await writeFile(path.join(findDir, 'finding.json'), JSON.stringify(packet, null, 2), 'utf8');
-  if (replaySpec) {
+  await writeFile(path.join(findDir, 'finding.json'), JSON.stringify(persistedPacket, null, 2), 'utf8');
+  if (persistedPacket.replaySpec) {
     await writeFile(
       path.join(findDir, 'replay.json'),
-      JSON.stringify(replaySpec, null, 2),
+      JSON.stringify(persistedPacket.replaySpec, null, 2),
       'utf8',
     );
   }
 
   // Write markdown summary
   const md = [
-    `# ${input.title}`,
+    `# ${persistedPacket.title}`,
     '',
     `- Finding ID: ${findingId}`,
-    `- Lifecycle: ${packet.lifecycleState}`,
-    `- Severity: ${input.severity}`,
-    `- Category: ${input.category}`,
-    `- Suite: ${input.suiteId}`,
+    `- Lifecycle: ${persistedPacket.lifecycleState}`,
+    `- Severity: ${persistedPacket.severity}`,
+    `- Category: ${persistedPacket.category}`,
+    `- Suite: ${persistedPacket.originatingSuiteId}`,
     '',
     '## Steps',
     '',
-    ...input.steps.map((s, i) => `${i + 1}. ${s}`),
+    ...persistedPacket.steps.map((s, i) => `${i + 1}. ${s}`),
     '',
     '## Expected',
     '',
-    input.expectedState,
+    persistedPacket.expectedState,
     '',
     '## Actual',
     '',
-    input.actualState,
+    persistedPacket.actualState,
     '',
     '## Replay',
     '',
-    replaySpec ? `- Mode: ${replaySpec.mode}` : '- No replay available',
+    persistedPacket.replaySpec ? `- Mode: ${persistedPacket.replaySpec.mode}` : '- No replay available',
     '',
     '## Evidence',
     '',
@@ -222,5 +239,5 @@ export async function writeFindingPacketV2(input: FindingPacketV2Input): Promise
   ].join('\n');
   await writeFile(path.join(findDir, 'finding.md'), md, 'utf8');
 
-  return { findingId, dir: findDir, packet };
+  return { findingId, dir: findDir, packet: persistedPacket };
 }

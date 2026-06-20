@@ -35,8 +35,9 @@ export function redactAttributes(
   rules: RedactionRule[] = DEFAULT_RULES,
 ): { attributes: Record<string, unknown>; redactions: RedactionEntry[] } {
   const redactions: RedactionEntry[] = [];
+  const result = { ...attributes };
 
-  for (const [key, value] of Object.entries(attributes)) {
+  for (const [key, value] of Object.entries(result)) {
     for (const rule of rules) {
       const matches = typeof rule.pattern === 'string'
         ? key.toLowerCase().includes(rule.pattern.toLowerCase())
@@ -45,13 +46,13 @@ export function redactAttributes(
       if (matches) {
         if (rule.test && !rule.test(value)) continue;
         redactions.push({ fieldPath: key, ruleId: rule.id });
-        attributes[key] = '[REDACTED]';
+        result[key] = '[REDACTED]';
         break;
       }
     }
   }
 
-  return { attributes, redactions };
+  return { attributes: result, redactions };
 }
 
 /** Redact values in a nested object by walking all string leaves. */
@@ -76,7 +77,14 @@ export function redactDeep(
           return '[REDACTED]';
         }
       }
-      return value;
+      const textRedaction = redactText(value);
+      redactions.push(
+        ...textRedaction.redactions.map((entry) => ({
+          ...entry,
+          fieldPath: currentPath,
+        })),
+      );
+      return textRedaction.result;
     }
 
     if (value !== null && typeof value === 'object') {
@@ -94,4 +102,39 @@ export function redactDeep(
   }
 
   return { result: walk(obj, path), redactions };
+}
+
+/** Redact common secret-bearing header and key/value forms from text artifacts. */
+export function redactText(
+  text: string,
+): { result: string; redactions: RedactionEntry[] } {
+  const redactions: RedactionEntry[] = [];
+  let result = text;
+  const patterns: Array<{ id: string; pattern: RegExp }> = [
+    {
+      id: 'authorization-header',
+      pattern: /(\bauthorization\s*[:=]\s*)([^\r\n,;]+)/gi,
+    },
+    {
+      id: 'cookie-header',
+      pattern: /(\bcookie\s*[:=]\s*)([^\r\n]+)/gi,
+    },
+    {
+      id: 'set-cookie-header',
+      pattern: /(\bset-cookie\s*[:=]\s*)([^\r\n]+)/gi,
+    },
+    {
+      id: 'api-key-value',
+      pattern: /((?:"|')?(?:api[_-]?key|token|secret|password|auth_token|credential|session|jwt)(?:"|')?\s*[:=]\s*(?:"|')?)([^"',;\s}\r\n]+)(?:"|')?/gi,
+    },
+  ];
+
+  for (const { id, pattern } of patterns) {
+    result = result.replace(pattern, (_match, prefix: string) => {
+      redactions.push({ fieldPath: 'text', ruleId: id });
+      return `${prefix}[REDACTED]`;
+    });
+  }
+
+  return { result, redactions };
 }

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { rm } from 'node:fs/promises';
 import { ArtifactStore } from '../src/artifacts/artifactStore.js';
+import { TraceWriter } from '../src/trace/traceWriter.js';
 
 describe('ArtifactStore', () => {
   const tmpDir = mkdtempSync(join(tmpdir(), 'artifact-test-'));
@@ -166,5 +167,53 @@ describe('ArtifactStore', () => {
     // Modifying snapshot should not affect store
     snapshot1.pop();
     expect(store.getArtifacts().length).toBe(2);
+  });
+
+  it('automatically redacts JSON and text artifacts and reports the redactions', async () => {
+    const store = new ArtifactStore(tmpDir, runId);
+    const jsonRef = await store.writeJson(
+      'request',
+      { headers: { authorization: 'Bearer json-secret' }, password: 'pw-secret' },
+      'automatic-redaction.json',
+    );
+    const textRef = await store.writeText(
+      'log',
+      'Authorization: Bearer text-secret\napi_key=key-secret',
+      'automatic-redaction.log',
+    );
+
+    const json = readFileSync(join(tmpDir, jsonRef.relativePath), 'utf8');
+    const text = readFileSync(join(tmpDir, textRef.relativePath), 'utf8');
+    expect(json).not.toContain('json-secret');
+    expect(json).not.toContain('pw-secret');
+    expect(text).not.toContain('text-secret');
+    expect(text).not.toContain('key-secret');
+    expect(jsonRef.redacted).toBe(true);
+    expect(textRef.redacted).toBe(true);
+
+    const manifest = store.buildManifest({
+      attemptId: 'automatic-redaction',
+      traceId: 'trace-redaction',
+    });
+    expect(manifest.redactionSummary.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it('records artifact writes as correlated trace spans', async () => {
+    const writer = new TraceWriter(tmpDir, 'artifact-trace');
+    const parentSpanId = writer.startSpan({ name: 'suite', kind: 'suite' });
+    const store = new ArtifactStore(tmpDir, runId, {
+      traceWriter: writer,
+      parentSpanId,
+      attemptId: 'attempt-artifact',
+    });
+
+    const ref = await store.writeJson('request', { ok: true }, 'traced-artifact.json');
+    const span = writer.getSpans().find((candidate) => candidate.kind === 'artifact.write');
+
+    expect(span?.parentSpanId).toBe(parentSpanId);
+    expect(span?.attemptId).toBe('attempt-artifact');
+    expect(span?.attributes.artifactId).toBe(ref.id);
+    expect(ref.traceId).toBe('artifact-trace');
+    expect(ref.spanId).toBe(span?.spanId);
   });
 });

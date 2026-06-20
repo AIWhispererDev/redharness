@@ -114,4 +114,30 @@ describe('TraceWriter', () => {
     const lines = content.trim().split('\n');
     expect(lines.length).toBe(3);
   });
+
+  it('redacts sensitive attributes and events automatically before persistence', async () => {
+    const writer = new TraceWriter(tmpDir, 'automatic-redaction');
+    const original = { headers: { authorization: 'Bearer trace-secret' } };
+    const id = writer.startSpan({
+      name: 'secret-bearing',
+      kind: 'http.request',
+      attributes: original,
+    });
+    writer.addEvent(id, 'response', {
+      body: { password: 'event-secret' },
+    });
+    writer.setAttribute(id, 'apiKey', 'attribute-secret');
+    await writer.flush();
+
+    expect(original.headers.authorization).toBe('Bearer trace-secret');
+    const content = readFileSync(
+      join(tmpDir, 'traces', 'trace-automatic-redaction.jsonl'),
+      'utf8',
+    );
+    expect(content).not.toContain('trace-secret');
+    expect(content).not.toContain('event-secret');
+    expect(content).not.toContain('attribute-secret');
+    expect(content).toContain('[REDACTED]');
+    expect(writer.getRedactionSummary().length).toBe(3);
+  });
 });

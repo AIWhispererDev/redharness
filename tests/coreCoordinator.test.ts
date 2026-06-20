@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { existsSync } from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -172,6 +173,12 @@ describe('RunCoordinator lifecycle', () => {
       async run(context) {
         expect(context.traceId).toBeTruthy();
         expect(context.spanId).toBeTruthy();
+        expect(context.traceWriter).toBeTruthy();
+        await context.artifactStore?.writeJson(
+          'trace-probe',
+          { status: 'captured' },
+          'trace-probe.json',
+        );
         return passingResult(id);
       },
     });
@@ -183,5 +190,17 @@ describe('RunCoordinator lifecycle', () => {
     expect(spans.some((span) => span.kind === 'run')).toBe(true);
     expect(spans.some((span) =>
       span.kind === 'suite' && span.attributes.suiteId === id)).toBe(true);
+    expect(spans.some((span) =>
+      span.kind === 'artifact.write'
+      && span.attributes.kind === 'trace-probe')).toBe(true);
+    expect(existsSync(path.join(
+      instance.getRunDir(),
+      'suites',
+      id,
+      'attempts',
+      'attempt-1',
+      'evidence',
+      'evidence-manifest.json',
+    ))).toBe(true);
   });
 });

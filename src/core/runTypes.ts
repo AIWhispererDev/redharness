@@ -68,6 +68,8 @@ export type SuiteContext = {
   attemptId?: string;
   /** Attempt-scoped artifact store for evidence persistence. */
   artifactStore?: import('../artifacts/artifactStore.js').ArtifactStore;
+  /** Run-scoped trace writer for suites that emit nested spans. */
+  traceWriter?: import('../trace/traceWriter.js').TraceWriter;
 };
 
 /** Suite definition registered in the registry. */

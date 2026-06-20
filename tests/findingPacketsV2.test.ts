@@ -135,6 +135,40 @@ describe('Finding packet v2', () => {
     }
     expect(foundSpec).toBe(true);
   });
+
+  it('redacts secrets from persisted finding and replay packets', async () => {
+    const secretStore = new ArtifactStore(tmpDir, 'v2-secret-test');
+    const secret = 'planted-finding-secret';
+    const result = await writeFindingPacketV2({
+      packId: 'test-pack',
+      title: 'Secret-bearing HTTP finding',
+      severity: 'high',
+      category: 'auth',
+      suiteId: 'security-smoke',
+      check: 'secret-redaction',
+      expectedState: 'Authorization is rejected',
+      actualState: `token=${secret}`,
+      steps: [`Send password=${secret}`],
+      store: secretStore,
+      attemptId: 'attempt-secret',
+      traceId: 'trace-secret',
+      httpCapture: {
+        method: 'GET',
+        url: 'https://example.com/private',
+        headers: { authorization: `Bearer ${secret}` },
+        status: 200,
+        assertion: 'private',
+      },
+    });
+
+    const finding = readFileSync(join(result.dir, 'finding.json'), 'utf8');
+    const markdown = readFileSync(join(result.dir, 'finding.md'), 'utf8');
+    const replay = readFileSync(join(result.dir, 'replay.json'), 'utf8');
+    expect(finding).not.toContain(secret);
+    expect(markdown).not.toContain(secret);
+    expect(replay).not.toContain(secret);
+    expect(result.packet.redactionSummary.length).toBeGreaterThan(0);
+  });
 });
 
 describe('Legacy finding packet', () => {
