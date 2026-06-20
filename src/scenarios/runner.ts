@@ -7,6 +7,8 @@ import { loadPackFromDir } from '../pack.js';
 import type { GradingInput, Grade } from '../graders/grader.js';
 import type { Grader } from '../graders/grader.js';
 import type { ExecutionStatus } from '../core/status.js';
+import type { ReliabilityReport } from '../metrics/reliability.js';
+import { computeReliability } from '../metrics/reliability.js';
 
 export type TrialResult = {
   trial: number;
@@ -17,6 +19,7 @@ export type TrialResult = {
   endedAt: string;
   durationMs: number;
   error?: string;
+  evidence: string[];
 };
 
 export type ScenarioRunResult = {
@@ -27,6 +30,14 @@ export type ScenarioRunResult = {
   startedAt: string;
   endedAt: string;
   durationMs: number;
+  dataset?: {
+    id: string;
+    version: string;
+    contentHash: string;
+  };
+  graderVersions: Array<{ id: string; version: string }>;
+  reliability: ReliabilityReport;
+  evidence: string[];
 };
 
 export type ScenarioRunnerOptions = {
@@ -36,6 +47,11 @@ export type ScenarioRunnerOptions = {
   headless?: boolean;
   outputDir?: string;
   graders?: Array<Grader>;
+  dataset?: {
+    id: string;
+    version: string;
+    contentHash: string;
+  };
 };
 
 /**
@@ -55,6 +71,8 @@ export async function runScenario(
     const trialStartMs = Date.now();
     const captures: CaptureStore = new Map();
     const assertions: Array<{ name: string; passed: boolean; message: string }> = [];
+    const evidence: string[] = [];
+    const toolCalls: string[] = [];
     let pageText = '';
 
     let trialStatus: ExecutionStatus = 'passed';
@@ -68,6 +86,7 @@ export async function runScenario(
         const setupActions = scenario.setup ?? [];
         for (const action of setupActions) {
           await executeFixtureAction(action, captures, options.baseUrl);
+          toolCalls.push(fixtureActionTool(action));
         }
 
         // Capture before state if state-diff grading is configured
@@ -77,6 +96,7 @@ export async function runScenario(
 
         for (const step of scenario.steps) {
           await executeFixtureAction(step, captures, options.baseUrl);
+          toolCalls.push(fixtureActionTool(step));
         }
 
         // Capture after state
@@ -128,6 +148,18 @@ export async function runScenario(
           }
 
           pageText = await page.locator('body').innerText().catch(() => '');
+          if (trialStatus !== 'passed' && options.outputDir) {
+            const screenshotPath = path.join(
+              options.outputDir,
+              scenario.id,
+              `trial-${t}`,
+              'failure.png',
+            );
+            await mkdir(path.dirname(screenshotPath), { recursive: true });
+            await page.screenshot({ path: screenshotPath, fullPage: true })
+              .catch(() => undefined);
+            evidence.push(screenshotPath);
+          }
         } finally {
           if (scenario.cleanup?.strategy === 'navigate-home') {
             await page.goto(options.baseUrl, {
@@ -164,7 +196,7 @@ export async function runScenario(
             trial: t,
             beforeState,
             afterState,
-            toolCalls: [],
+            toolCalls,
           },
         };
 
@@ -186,6 +218,28 @@ export async function runScenario(
       }
     }
 
+    if (trialStatus !== 'passed' && options.outputDir) {
+      const evidencePath = path.join(
+        options.outputDir,
+        scenario.id,
+        `trial-${t}`,
+        'failure.json',
+      );
+      await mkdir(path.dirname(evidencePath), { recursive: true });
+      await writeFile(evidencePath, JSON.stringify({
+        scenarioId: scenario.id,
+        trial: t,
+        status: trialStatus,
+        error: trialError,
+        assertions,
+        beforeState,
+        afterState,
+        toolCalls,
+        grades,
+      }, null, 2), 'utf8');
+      evidence.push(evidencePath);
+    }
+
     trials.push({
       trial: t,
       status: trialStatus,
@@ -195,6 +249,7 @@ export async function runScenario(
       endedAt: new Date().toISOString(),
       durationMs: Date.now() - trialStartMs,
       error: trialError,
+      evidence,
     });
   }
 
@@ -213,6 +268,17 @@ export async function runScenario(
     startedAt,
     endedAt: new Date().toISOString(),
     durationMs: Date.now() - startMs,
+    dataset: options.dataset,
+    graderVersions: (options.graders ?? []).map((grader) => ({
+      id: grader.id,
+      version: grader.version,
+    })),
+    reliability: computeReliability(
+      trials.map((trial) => trial.status as 'passed' | 'failed' | 'error' | 'cancelled'),
+      trials.map((trial) => trial.durationMs),
+      Math.min(3, trials.length || 1),
+    ),
+    evidence: trials.flatMap((trial) => trial.evidence),
   };
 }
 
@@ -251,6 +317,18 @@ async function executeFixtureAction(
     default:
       // Other actions are ignored for fixture targets
       break;
+  }
+}
+
+function fixtureActionTool(action: import('./schema.js').ScenarioAction): string {
+  switch (action.action) {
+    case 'goto':
+    case 'capture':
+      return 'http_get';
+    case 'wait':
+      return 'wait';
+    default:
+      return action.action;
   }
 }
 

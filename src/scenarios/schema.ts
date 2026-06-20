@@ -48,6 +48,7 @@ export type ScenarioGrader = {
   type: 'deterministic' | 'rule-set' | 'state-diff' | 'trajectory' | 'rubric' | 'pairwise';
   target?: string;
   rubricId?: string;
+  config?: Record<string, unknown>;
 };
 
 /** Complete scenario definition. */

@@ -153,9 +153,22 @@ describe('scenario runner with fixtures', () => {
     const result = await runScenario(scenario, {
       packDir: fixturePackDir,
       baseUrl: fixtureV1.baseUrl,
+      graders: [new TrajectoryGrader(scenario.trajectory ?? {})],
+      dataset: {
+        id: 'core',
+        version: '1.0.0',
+        contentHash: 'test-hash',
+      },
     });
 
     expect(result.trials.length).toBe(5);
+    expect(result.trials.every((trial) => trial.grades[0]?.status === 'passed')).toBe(true);
+    expect(result.reliability.attemptedTrials).toBe(5);
+    expect(result.dataset?.contentHash).toBe('test-hash');
+    expect(result.graderVersions).toContainEqual({
+      id: 'trajectory',
+      version: '1.0.0',
+    });
   });
 
   it('runs not-found scenario against 404 route', async () => {

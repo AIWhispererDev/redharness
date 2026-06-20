@@ -56,7 +56,7 @@ export function registerRulesGrader(rules: any[]): void {
 
 // State-diff grader is registered lazily
 import { StateDiffGrader } from './stateDiff.js';
-graderRegistry.register('state-diff', (config) => new StateDiffGrader());
+graderRegistry.register('state-diff', (config) => new StateDiffGrader(config as any));
 
 // Composite grader
 import { CompositeGrader } from './composite.js';
