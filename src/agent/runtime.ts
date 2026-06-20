@@ -6,7 +6,7 @@
  * This runtime is provider-neutral, bounded, cancellable, and resumable.
  */
 
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import type {
   AgentDefinition,
   AgentState,
@@ -28,6 +28,9 @@ import type { ExecutionStatus } from '../core/status.js';
 import type { BudgetConsumption } from './agentTypes.js';
 import { AgentTraceHelper } from './runtimeTrace.js';
 import { AgentEvidenceBuilder } from './agentEvidence.js';
+import type { ApprovalBinding, VersionedMetadata } from './runStateStore.js';
+import type { IdempotencyStore } from './idempotency.js';
+import type { AgentRunService } from '../service/agentRunService.js';
 import type { ArtifactStore } from '../artifacts/artifactStore.js';
 import type { TraceWriter } from '../trace/traceWriter.js';
 
@@ -44,6 +47,14 @@ export type RuntimeOptions = {
   isCiEnvironment?: boolean;
   /** Controlled fixture origin passed to fixture-only tools. */
   fixtureBaseUrl?: string;
+  /** Agent run service for durable control-plane integration. */
+  agentRunService?: AgentRunService;
+  /** Idempotency store for preventing repeated side effects. */
+  idempotencyStore?: IdempotencyStore;
+  /** Versioned metadata for checkpoint/run-state persistence. */
+  versionedMetadata?: VersionedMetadata;
+  /** Callback when runtime transitions to awaiting-approval (for service integration). */
+  onAwaitingApproval?: (approvalBindings: ApprovalBinding[], checkpointId?: string) => Promise<void>;
   /** Trace writer for evidence persistence (injected by coordinator). */
   traceWriter?: TraceWriter;
   /** Artifact store for evidence persistence. */
@@ -86,6 +97,10 @@ export class AgentRuntime {
   private traceHelper: AgentTraceHelper;
   private evidenceBuilder: AgentEvidenceBuilder;
   private artifactStore?: ArtifactStore;
+  private agentRunService?: AgentRunService;
+  private idempotencyStore?: IdempotencyStore;
+  private versionedMetadata?: VersionedMetadata;
+  private onAwaitingApproval?: (approvalBindings: ApprovalBinding[], checkpointId?: string) => Promise<void>;
 
   constructor(options: RuntimeOptions) {
     this.agent = options.agent;
@@ -142,6 +157,10 @@ export class AgentRuntime {
       agentId: this.agent.id,
     });
     this.artifactStore = options.artifactStore;
+    this.agentRunService = options.agentRunService;
+    this.idempotencyStore = options.idempotencyStore;
+    this.versionedMetadata = options.versionedMetadata;
+    this.onAwaitingApproval = options.onAwaitingApproval;
 
     this.state = {
       runId: this.runId,
@@ -260,6 +279,25 @@ export class AgentRuntime {
             continue;
           }
 
+          // Check idempotency — if this exact mutation was already completed, skip it
+          if (this.idempotencyStore?.isImmutable(toolCall.name, toolCall.arguments, this.runId)) {
+            const skippedResult = {
+              success: true,
+              output: { skipped: true, reason: `Action already completed (idempotency key).` },
+              durationMs: 0,
+            };
+            this.state.messages.push({
+              role: 'tool',
+              content: JSON.stringify(skippedResult),
+              toolCallId: toolCall.id,
+              toolName: toolCall.name,
+              toolArguments: toolCall.arguments,
+              toolResult: skippedResult,
+              timestamp: new Date().toISOString(),
+            });
+            continue;
+          }
+
           // Execute through policy engine
           const context: ToolExecutionContext = {
             agentId: this.agent.id,
@@ -275,10 +313,37 @@ export class AgentRuntime {
 
           const result = await this.policy.executeWithPolicy(toolCall.name, toolCall.arguments, context);
 
-          if (result.approvalDecision?.approvalRequest) {
+          // If tool requires human approval, pause execution and persist state
+          if (result.approvalDecision?.approvalRequest && result.approvalDecision.requiresHuman) {
+            // Create durable approval binding with hashed arguments
+            const risk = result.approvalDecision.approvalRequest?.risk ?? 'write';
+            const approvalBinding = this.approval.createApprovalBinding(
+              toolCall.name,
+              toolCall.arguments,
+              risk as import('./agentTypes.js').ToolRiskLevel,
+              this.runId,
+              300_000, // 5 minute expiration
+            );
+
+            // Take checkpoint before pausing
+            let checkpointId: string | undefined;
+            if (this.checkpoints) {
+              const ckpt = await this.checkpoints.save(this.state, this.budgets.getConsumption());
+              checkpointId = ckpt.id;
+              this.state.checkpointId = ckpt.id;
+            }
+
             this.state.pendingApprovals.push(
               result.approvalDecision.approvalRequest,
             );
+
+            // Notify via callback (used by service integration)
+            if (this.onAwaitingApproval) {
+              await this.onAwaitingApproval([approvalBinding], checkpointId);
+            }
+
+            // Return paused state — caller will re-enter via resume after approval
+            return this.buildResult(startedAt, startMs, 'cancelled', `Awaiting approval for tool called. Status saved to checkpoint.`);
           }
 
           // Record the tool result message
@@ -303,6 +368,20 @@ export class AgentRuntime {
               timestamp: new Date().toISOString(),
               sourceTool: toolCall.name,
             });
+          }
+
+          // Record idempotency for successful mutations
+          if (result.allowed && result.toolResult?.success && this.idempotencyStore) {
+            const toolDef = this.registry.get(toolCall.name);
+            const mutationIntent = toolDef?.risk ?? 'write';
+            this.idempotencyStore.record(
+              toolCall.name,
+              toolCall.arguments,
+              this.runId,
+              this.state.turn,
+              'success',
+              mutationIntent,
+            );
           }
 
           // Track for loop/repeat detection
@@ -380,6 +459,11 @@ export class AgentRuntime {
     this.state = checkpoint.agentState;
     this.budgets.reset(checkpoint.budgetsConsumed);
 
+    // Reset stop condition detectors for fresh state after resume
+    this.repeatedActionDetector.reset();
+    this.loopDetector.reset();
+    this.stallDetector.reset();
+
     // Continue the run loop
     return this.run();
   }
@@ -403,6 +487,26 @@ export class AgentRuntime {
       endedAt: new Date().toISOString(),
       durationMs: Date.now() - startMs,
       checkpointId: this.state.checkpointId,
+    };
+  }
+
+  /** Build versioned metadata from current runtime configuration. */
+  getVersionedMetadata(policyVersion: string = '1.0'): VersionedMetadata {
+    return {
+      policyVersion,
+      toolVersions: Object.fromEntries(
+        this.registry.getAll().map((t) => [t.name, t.version]),
+      ),
+      modelConfig: this.agent.model,
+      toolDefinitions: this.registry.getAll().map((t) => ({
+        name: t.name,
+        version: t.version,
+        inputSchema: t.inputSchema,
+        risk: t.risk,
+        capabilities: t.capabilities,
+      })),
+      policy: this.agent.policy,
+      intent: this.intent,
     };
   }
 

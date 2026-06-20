@@ -7,6 +7,7 @@
  *   -> execution -> postcondition and trace
  */
 
+import { createHash, randomBytes } from 'node:crypto';
 import type {
   ApprovalPolicy,
   ApprovalRequest,
@@ -15,6 +16,7 @@ import type {
   ToolDefinition,
   ToolRiskLevel,
 } from './agentTypes.js';
+import type { ApprovalBinding } from './runStateStore.js';
 import type { ToolRegistry } from './toolRegistry.js';
 import { validateActionAgainstIntent } from './intent.js';
 import type { JsonValue } from '../trace/traceTypes.js';
@@ -225,6 +227,34 @@ export class ApprovalEngine {
       intendedAction: `Execute ${toolName} with ${Object.keys(args).length} arguments`,
       risk,
       requestedAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Create an approval binding with hashed arguments, expiration, and nonce.
+   * This is the durable version used by the control plane.
+   */
+  createApprovalBinding(
+    toolName: string,
+    args: Record<string, unknown>,
+    risk: ToolRiskLevel,
+    runId: string,
+    expiresInMs: number = 300_000,
+  ): ApprovalBinding {
+    const id = `apb-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const argumentsHash = createHash('sha256')
+      .update(JSON.stringify(args, Object.keys(args).sort()))
+      .digest('hex');
+    return {
+      id,
+      runId,
+      toolName,
+      argumentsHash,
+      arguments: args,
+      risk,
+      requestedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + expiresInMs).toISOString(),
+      nonce: randomBytes(16).toString('hex'),
     };
   }
 
