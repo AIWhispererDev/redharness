@@ -32,7 +32,7 @@ jobs:
       - name: Run tests
         run: npm test
 
-      - name: Run deterministic release profile
+      - name: Run deterministic fixture release gate
         run: npm run release:ci
 
       - name: Upload release profile reports

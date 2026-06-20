@@ -1,0 +1,68 @@
+name: Live Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Target environment (production, staging)'
+        required: true
+        default: 'staging'
+      pack:
+        description: 'Pack ID to run'
+        required: true
+        default: 'fixture-web'
+
+jobs:
+  live-smoke:
+    runs-on: ubuntu-latest
+    # Live jobs require explicit environment configuration to run.
+    # This gate prevents accidental execution without the required secrets.
+    environment: ${{ github.event.inputs.target || 'staging' }}
+    if: ${{ secrets.QA_LIVE_ENABLED != '' }}
+
+    strategy:
+      matrix:
+        node-version: [22]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run authenticated smoke (requires secret-backed credentials)
+        env:
+          QA_STORAGE_STATE: ${{ secrets.QA_STORAGE_STATE }}
+          QA_BASE_URL: ${{ secrets.QA_BASE_URL }}
+        run: |
+          if [ -z "$QA_STORAGE_STATE" ] || [ -z "$QA_BASE_URL" ]; then
+            echo "Missing required secrets for live smoke. Configure QA_STORAGE_STATE and QA_BASE_URL in environment '${{ github.event.inputs.target }}'."
+            exit 1
+          fi
+          echo "$QA_STORAGE_STATE" > /tmp/storage-state.json
+          npm run qa -- run ${{ github.event.inputs.pack || 'fixture-web' }} \
+            --storage-state /tmp/storage-state.json \
+            --headed=false \
+            --ci
+
+      - name: Upload live smoke reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-smoke-reports
+          path: runs/
+          if-no-files-found: warn
+
+      - name: Upload live smoke traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-smoke-traces
+          path: traces/
+          if-no-files-found: warn

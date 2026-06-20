@@ -1,0 +1,106 @@
+name: Nightly
+
+on:
+  schedule:
+    # Run at 06:00 UTC every day — deterministic, no human prompts.
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+jobs:
+  nightly-fixture:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [22]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Nightly fixture agent evaluation (deterministic)
+        run: |
+          npm run qa -- agent-eval fixture-web smoke \
+            --provider fake \
+            --headed=false \
+            --findings
+
+      - name: Nightly fixture red-team evaluation (deterministic)
+        run: |
+          npm run qa -- redteam fixture-web \
+            --dataset redteam \
+            --split smoke \
+            --provider fake \
+            --headed=false \
+            --write-findings \
+            --release-gate
+
+      - name: Nightly scheduled run
+        run: |
+          npm run qa -- scheduled fixture-web --profile release
+
+      - name: Upload nightly fixture reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-fixture-reports
+          path: |
+            runs/
+            artifacts/
+          if-no-files-found: warn
+
+      - name: Upload nightly fixture findings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-fixture-findings
+          path: |
+            runs/*/findings/
+          if-no-files-found: warn
+
+      - name: Upload nightly traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-fixture-traces
+          path: traces/
+          if-no-files-found: warn
+
+  nightly-retention:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Dry-run retention (preview only, no deletion)
+        run: |
+          npm run qa -- retention --older-than-days 90
+
+      - name: Apply retention for old runs (older than 180 days)
+        if: github.event_name == 'schedule'  # Only on scheduled, not manual dispatch
+        run: |
+          npm run qa -- retention --older-than-days 180 --apply
+
+      - name: Retention report
+        if: always()
+        run: |
+          echo "## Retention Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "See retention command output above." >> $GITHUB_STEP_SUMMARY
