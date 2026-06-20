@@ -6,7 +6,7 @@
  * result with explanation.
  */
 
-import type { RegressionGate, GateSuiteResult, GateResult, RunComparison, MetricDelta, CandidateRunResult } from './experimentTypes.js';
+import type { RegressionGate, GateSuiteResult, GateResult, RunComparison, MetricDelta, CandidateRunResult, GraderConfidencePolicy } from './experimentTypes.js';
 
 /**
  * Evaluate all regression gates against a run comparison.
@@ -30,6 +30,10 @@ export function evaluateGates(
 
   if (gate.requiredCoverage) {
     gates.push(evaluateCoverageGate(candidateResult, gate.requiredCoverage));
+  }
+
+  if (gate.graderConfidencePolicy) {
+    gates.push(evaluateGraderConfidenceGate(candidateResult, gate.graderConfidencePolicy));
   }
 
   return {
@@ -220,5 +224,66 @@ function evaluateCoverageGate(
     details: failures.length > 0
       ? `Coverage gaps: ${failures.join('; ')}`
       : 'All required coverage satisfied',
+  };
+}
+
+/**
+ * Gate: Grader confidence policy — enforces that judge-only (non-deterministic)
+ * high-severity results cannot independently block release unless policy
+ * explicitly allows it.
+ *
+ * Judge-only graders: rubric, pairwise (when using a judge model).
+ * Deterministic graders: deterministic, state-diff, trajectory, rule-set.
+ *
+ * When requireDeterministicOrCorroborated is true (default for high-severity
+ * gates), a result that depends only on low-confidence or model-assisted
+ * grading is flagged.
+ */
+function evaluateGraderConfidenceGate(
+  result: CandidateRunResult,
+  policy: GraderConfidencePolicy,
+): GateResult {
+  const details: string[] = [];
+  let passed = true;
+
+  // Collect all grader versions used across suites
+  const suiteGraderVersions = result.suiteResults.flatMap(
+    (s) => s.graderVersions ?? [],
+  );
+
+  if (suiteGraderVersions.length === 0 && policy.requireDeterministicOrCorroborated) {
+    // No grader metadata at all — fail if policy requires it
+    passed = false;
+    details.push('No grader version metadata available; cannot verify deterministic grading');
+  }
+
+  // Check suites with only judge-grade graders (rubric, pairwise with judge)
+  const judgeOnlyIds = ['rubric', 'pairwise'];
+  const onlyJudgeGraded = result.suiteResults.filter((s) => {
+    const gvs = s.graderVersions ?? [];
+    return gvs.length > 0 && gvs.every((gv) => judgeOnlyIds.includes(gv.id));
+  });
+
+  if (policy.requireDeterministicOrCorroborated && onlyJudgeGraded.length > 0) {
+    // Judge-only graders are acceptable only if policy allows it
+    if (!policy.allowJudgeOnlyGates) {
+      passed = false;
+      details.push(
+        `${onlyJudgeGraded.length} suite(s) use only judge-based grading (rubric/pairwise) without deterministic corroboration`,
+      );
+      for (const s of onlyJudgeGraded.slice(0, 5)) {
+        details.push(`  - ${s.scenarioId}: ${s.graderVersions?.map((gv) => gv.id).join(', ')}`);
+      }
+    }
+  }
+
+  return {
+    passed,
+    gateName: 'grader-confidence-policy',
+    expected: policy.requireDeterministicOrCorroborated
+      ? 'Deterministic or corroborated grading required for high-severity gates'
+      : 'Grader confidence policy not enforced',
+    actual: passed ? 'Policy satisfied' : details.join('; '),
+    details: details.join('\n') || 'Grader confidence policy satisfied',
   };
 }

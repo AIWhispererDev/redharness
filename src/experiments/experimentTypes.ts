@@ -118,6 +118,13 @@ export type CoverageGate = {
   required: number; // 1.0 = 100%
 };
 
+export type GraderConfidencePolicy = {
+  /** When true, high-severity gates require deterministic or corroborated grading. */
+  requireDeterministicOrCorroborated: boolean;
+  /** When true, judge-only (rubric/pairwise) grading is allowed for gate decisions. */
+  allowJudgeOnlyGates: boolean;
+};
+
 export type RegressionGate = {
   requiredScenarioFailures: number; // 0 = no failures allowed
   maxNewHighFindings: number;
@@ -126,6 +133,7 @@ export type RegressionGate = {
   maxP95LatencyDelta: number; // positive = allowed increase
   minPassK?: PassKGate;
   requiredCoverage?: Record<string, number>; // tag -> required rate
+  graderConfidencePolicy?: GraderConfidencePolicy;
 };
 
 export type GateResult = {
