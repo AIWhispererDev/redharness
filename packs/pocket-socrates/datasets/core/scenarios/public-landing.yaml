@@ -1,0 +1,30 @@
+id: public-landing
+version: 1
+title: Public landing page loads and shows expected content
+tags: [smoke, public, release]
+target:
+  kind: browser
+  route: /landing
+prerequisites:
+  authProfile: none
+actor:
+  kind: scripted
+steps:
+  - action: goto
+    url: /landing
+  - action: capture
+    as: page_title
+    selector: title
+  - action: assert_text
+    value: Pocket Socrates
+  - action: assert_url
+    pattern: /landing
+expected:
+  - assertion: text_present
+    text: Walk into therapy
+  - assertion: text_present
+    text: Launch the App
+budgets:
+  wallTimeMs: 30000
+cleanup:
+  strategy: none

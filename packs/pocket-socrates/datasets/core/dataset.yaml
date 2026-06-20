@@ -1,0 +1,10 @@
+id: core
+version: 1.0.0
+description: Release-gating core behavior for Pocket Socrates
+contentHash: 7ffa771d308fdd111cc1d42d33a37c68
+splits:
+  smoke: [public-landing]
+  release: [public-landing]
+provenance:
+  owner: qa
+  createdFrom: manual
