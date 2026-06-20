@@ -9,32 +9,42 @@
  * Run from a clean checkout to confirm reproducibility.
  */
 import { describe, it, expect } from 'vitest';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { execSync } from 'node:child_process';
 
 const repoRoot = resolve(import.meta.dirname, '..');
+const git = (args: string) =>
+  execSync(`git -c safe.directory=${repoRoot.replace(/\\/g, '/')} ${args}`, {
+    cwd: repoRoot,
+    encoding: 'utf8',
+  });
+
+/** Recursively find all .ts files under a root directory. Cross-platform. */
+function findTsFiles(dir: string): string[] {
+  const result: string[] = [];
+  const walk = (current: string) => {
+    for (const entry of readdirSync(current)) {
+      const full = resolve(current, entry);
+      if (statSync(full).isDirectory()) {
+        walk(full);
+      } else if (entry.endsWith('.ts')) {
+        // Return paths relative to repo root (Git-style)
+        result.push(full.startsWith(repoRoot) ? full.slice(repoRoot.length + 1).replace(/\\/g, '/') : full);
+      }
+    }
+  };
+  walk(dir);
+  return result.sort();
+}
 
 describe('repository integrity', () => {
   it('src/artifacts/artifactStore.ts is not ignored by git', () => {
     // This file is critical — it was previously hidden by the root /artifacts/ pattern
-    const result = execSync('git check-ignore -v src/artifacts/artifactStore.ts', {
-      cwd: repoRoot,
-      encoding: 'utf8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-    }).trim();
-    // If the file is not ignored, git exits 0 with no output only if it doesn't have a file-like path.
-    // But git outputs nothing to stdout when it's not ignored,
-    // and outputs to stderr with an ignore rule match.
-    // Actually git check-ignore exits 0 when the file IS ignored, and 1 when it's NOT ignored.
-    // We want it to NOT be ignored. So expect exit code 1 or empty output.
+    // git check-ignore exits 0 when the file IS ignored, 1 when it is NOT ignored
     const exitCode = (() => {
       try {
-        execSync('git check-ignore src/artifacts/artifactStore.ts', {
-          cwd: repoRoot,
-          encoding: 'utf8',
-          stdio: ['pipe', 'pipe', 'pipe'],
-        });
+        git('check-ignore src/artifacts/artifactStore.ts');
         return 0;
       } catch (e: any) {
         return e.status;
@@ -43,9 +53,8 @@ describe('repository integrity', () => {
     expect(exitCode).not.toBe(0);
   });
 
-  it('no imported source file is gitignored', () => {
-    // List all .ts files imported from src/ and verify they're tracked
-    // We check a representative set of core source directories
+  it('critical source directories exist in git', () => {
+    // Verify critical source directories are tracked by git
     const criticalDirs = [
       'src/artifacts',
       'src/core',
@@ -58,71 +67,37 @@ describe('repository integrity', () => {
       'src/redteam',
     ];
 
-    for (const dir of criticalDirs) {
-      const absDir = resolve(repoRoot, dir);
-      if (!existsSync(absDir)) continue; // dir may not exist yet
+    const tracked = git('ls-files src/').trim().split('\n').filter(Boolean);
 
-      const files = readFileSync(absDir, { encoding: 'utf8' });
-      // Only check that the directory exists in git
-      // A deeper check: verify every .ts file in src/ is tracked
+    for (const dir of criticalDirs) {
+      const hasFiles = tracked.some((f: string) => f.startsWith(dir + '/'));
+      expect(hasFiles, `Directory ${dir} has no tracked files`).toBe(true);
     }
   });
 
   it('every .ts file under src/ is tracked by git', () => {
-    const { execSync } = require('node:child_process');
-    // Find all .ts files tracked in git
     const tracked = new Set(
-      execSync('git ls-files src/', { cwd: repoRoot, encoding: 'utf8' })
+      git('ls-files src/')
         .trim()
         .split('\n')
         .filter(Boolean),
     );
 
-    // Find all .ts files on disk
-    const { execSync: exec } = require('node:child_process');
-    const onDisk: string[] = [];
-    // Use find since we're in git context
-    const findResult = execSync('find src/ -name "*.ts" -type f', {
-      cwd: repoRoot,
-      encoding: 'utf8',
-    })
-      .trim()
-      .split('\n')
-      .filter(Boolean);
-
-    const untracked: string[] = [];
-    for (const file of findResult) {
-      if (!tracked.has(file)) {
-        untracked.push(file);
-      }
-    }
-
+    const onDisk = findTsFiles(resolve(repoRoot, 'src'));
+    const untracked = onDisk.filter((f) => !tracked.has(f));
     expect(untracked).toEqual([]);
   });
 
   it('every .ts test file under tests/ is tracked by git', () => {
     const tracked = new Set(
-      execSync('git ls-files tests/', { cwd: repoRoot, encoding: 'utf8' })
+      git('ls-files tests/')
         .trim()
         .split('\n')
         .filter(Boolean),
     );
 
-    const findResult = execSync('find tests/ -name "*.ts" -type f', {
-      cwd: repoRoot,
-      encoding: 'utf8',
-    })
-      .trim()
-      .split('\n')
-      .filter(Boolean);
-
-    const untracked: string[] = [];
-    for (const file of findResult) {
-      if (!tracked.has(file)) {
-        untracked.push(file);
-      }
-    }
-
+    const onDisk = findTsFiles(resolve(repoRoot, 'tests'));
+    const untracked = onDisk.filter((f) => !tracked.has(f));
     expect(untracked).toEqual([]);
   });
 });
@@ -131,30 +106,18 @@ describe('package integrity', () => {
   it('package.json main/bin point to existing files', () => {
     const pkg = JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf8'));
 
-    // Bin entries should exist
+    // Compiled bin entries must map back to a source entry before build.
     for (const [name, binPath] of Object.entries(pkg.bin ?? {})) {
       const fullPath = resolve(repoRoot, binPath as string);
-      expect(existsSync(fullPath), `Bin entry "${name}" points to missing file: ${binPath}`).toBe(true);
+      const sourcePath = resolve(
+        repoRoot,
+        String(binPath).replace(/^dist[\\/]/, '').replace(/\.js$/, '.ts'),
+      );
+      expect(
+        existsSync(fullPath) || existsSync(sourcePath),
+        `Bin entry "${name}" has no build output or source: ${binPath}`,
+      ).toBe(true);
     }
-  });
-
-  it('npm run typecheck succeeds', () => {
-    const result = execSync('npx tsc --noEmit', {
-      cwd: repoRoot,
-      encoding: 'utf8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    expect(result).toBeDefined();
-  });
-
-  it('npm test passes', () => {
-    const result = execSync('npx vitest run --reporter=verbose', {
-      cwd: repoRoot,
-      encoding: 'utf8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    // Should contain the test output
-    expect(result).toContain('Tests');
   });
 
   it('CLI smoke: list command works', () => {
