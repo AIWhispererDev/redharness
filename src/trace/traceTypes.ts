@@ -165,6 +165,7 @@ export type FindingPacketV2 = {
   evidenceManifest: EvidenceManifest;
   redactionSummary: RedactionEntry[];
   replayCommand?: string;
+  replaySpec?: ReplaySpec;
   expectedState: string;
   actualState: string;
   steps: string[];

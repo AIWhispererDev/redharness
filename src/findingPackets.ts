@@ -108,7 +108,7 @@ export type FindingPacketV2Input = {
  */
 export async function writeFindingPacketV2(input: FindingPacketV2Input): Promise<{ findingId: string; dir: string; packet: FindingPacketV2 }> {
   const findingId = slugifyFinding(input.title) + '-' + randomUUID().replace(/-/g, '').slice(0, 8);
-  const findDir = path.join(input.store['baseDir'], 'findings', findingId);
+  const findDir = path.join(input.store.getBaseDir(), 'findings', findingId);
   await mkdir(findDir, { recursive: true });
 
   // Build replay spec
@@ -173,6 +173,7 @@ export async function writeFindingPacketV2(input: FindingPacketV2Input): Promise
     environment: { packId: input.packId, baseUrl: input.baseUrl },
     evidenceManifest: manifest,
     redactionSummary: [],
+    replaySpec,
     expectedState: input.expectedState,
     actualState: input.actualState,
     steps: input.steps,
@@ -180,6 +181,13 @@ export async function writeFindingPacketV2(input: FindingPacketV2Input): Promise
 
   // Write packet JSON
   await writeFile(path.join(findDir, 'finding.json'), JSON.stringify(packet, null, 2), 'utf8');
+  if (replaySpec) {
+    await writeFile(
+      path.join(findDir, 'replay.json'),
+      JSON.stringify(replaySpec, null, 2),
+      'utf8',
+    );
+  }
 
   // Write markdown summary
   const md = [

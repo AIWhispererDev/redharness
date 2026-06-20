@@ -18,6 +18,11 @@ export class ArtifactStore {
     this.baseDir = path.resolve(baseDir);
   }
 
+  /** Absolute root used by this attempt-scoped store. */
+  getBaseDir(): string {
+    return this.baseDir;
+  }
+
   /** Write an artifact from a Buffer or string, returning its ref. */
   async write(params: {
     kind: string;
@@ -33,7 +38,8 @@ export class ArtifactStore {
     const sha256 = createHash('sha256').update(buf).digest('hex');
     const id = randomUUID().replace(/-/g, '').slice(0, 16);
     const relDir = params.subDir ?? 'artifacts';
-    const relativePath = path.join(relDir, params.filename);
+    // Always use forward slashes for relative paths (cross-platform)
+    const relativePath = path.join(relDir, params.filename).replace(/\\/g, '/');
     const absPath = path.join(this.baseDir, relativePath);
 
     await mkdir(path.dirname(absPath), { recursive: true });

@@ -59,6 +59,7 @@ describe('Finding packet v2', () => {
     // Check guided replay spec
     const specPath = join(result.dir, 'replay.spec.ts');
     expect(existsSync(specPath)).toBe(true);
+    expect(existsSync(join(result.dir, 'replay.json'))).toBe(true);
     const spec = readFileSync(specPath, 'utf8');
     expect(spec).toContain('test.fixme');
     expect(spec).not.toContain('expect(true).toBe(true)');
