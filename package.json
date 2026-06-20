@@ -8,6 +8,8 @@
     "dev": "tsx src/cli.ts",
     "qa": "tsx src/cli.ts",
     "build": "tsc --project tsconfig.build.json",
+    "verify:built": "node dist/src/cli.js list pocket-socrates --json",
+    "verify": "npm run typecheck && npm test && npm run build && npm run verify:built",
     "save-auth": "tsx src/saveAuth.ts",
     "save-auth-cdp": "tsx src/saveAuthFromCdp.ts"
   },
@@ -16,7 +18,7 @@
   "license": "ISC",
   "type": "module",
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.0.0"
   },
   "repository": {
     "type": "git",
@@ -27,8 +29,13 @@
   },
   "homepage": "https://github.com/user/qa-harness#readme",
   "bin": {
-    "qa-harness": "./src/cli.ts"
+    "qa-harness": "./dist/src/cli.js"
   },
+  "files": [
+    "dist/",
+    "packs/",
+    "README.md"
+  ],
   "dependencies": {
     "commander": "^15.0.0",
     "yaml": "^2.9.0",

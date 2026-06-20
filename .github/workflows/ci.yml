@@ -12,7 +12,7 @@ jobs:
 
     strategy:
       matrix:
-        node-version: [18, 20, 22]
+        node-version: [22]
 
     steps:
       - uses: actions/checkout@v4
@@ -35,5 +35,14 @@ jobs:
       - name: Build (source compilation)
         run: npm run build
 
-      - name: CLI smoke (list command requires no auth)
-        run: npm run qa list pocket-socrates
+      - name: Built CLI smoke (list command requires no auth)
+        run: npm run verify:built
+
+      - name: Package distributable
+        run: npm pack --dry-run
+
+      - name: Retain compiled distribution
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-harness-dist
+          path: dist/
