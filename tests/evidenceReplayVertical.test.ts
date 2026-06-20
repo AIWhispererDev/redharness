@@ -22,8 +22,7 @@ import { TraceWriter } from '../src/trace/traceWriter.js';
 import { ArtifactStore } from '../src/artifacts/artifactStore.js';
 import { BrowserInstrumentation } from '../src/trace/browserInstrumentation.js';
 import { writeFindingPacketV2 } from '../src/findingPackets.js';
-import { confirmFinding } from '../src/replay/confirmationRunner.js';
-import { redactDeep, redactAttributes } from '../src/trace/redaction.js';
+import { confirmFinding, confirmFromPacket } from '../src/replay/confirmationRunner.js';
 import type { ReplaySpec, FindingPacketV2, RecordedAction, AssertionRecipe } from '../src/trace/traceTypes.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -33,11 +32,6 @@ import type { ReplaySpec, FindingPacketV2, RecordedAction, AssertionRecipe } fro
 /** Read a finding packet from disk. */
 async function readFindingPacket(dir: string): Promise<FindingPacketV2> {
   return JSON.parse(await readFile(join(dir, 'finding.json'), 'utf8')) as FindingPacketV2;
-}
-
-/** Write back a finding packet to disk. */
-async function writeFindingPacketToDisk(dir: string, packet: FindingPacketV2): Promise<void> {
-  await writeFile(join(dir, 'finding.json'), JSON.stringify(packet, null, 2), 'utf8');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -161,14 +155,9 @@ describe('Evidence/replay vertical slice', () => {
     });
 
     // Confirm the browser defect via replay
-    const confirmResult = await confirmFinding(
-      packetResult.packet,
-      packetResult.packet.replaySpec! as ReplaySpec,
-      {
-        maxAttempts: 1,
-        evidenceDir: join(packetResult.dir, 'confirmations'),
-      },
-    );
+    const confirmResult = await confirmFromPacket(packetResult.dir, {
+      maxAttempts: 1,
+    });
 
     expect(confirmResult.reproduced).toBe(true);
     expect(confirmResult.lifecycleState).toBe('confirmed-semantic');
@@ -178,18 +167,11 @@ describe('Evidence/replay vertical slice', () => {
     const confirmDir = join(packetResult.dir, 'confirmations');
     expect(existsSync(confirmDir)).toBe(true);
 
-    // Update lifecycle state in finding.json
-    const packetOnDisk = await readFindingPacket(packetResult.dir);
-    packetOnDisk.lifecycleState = confirmResult.lifecycleState;
-    packetOnDisk.confirmationAttemptIds.push(`attempt-1`);
-    packetOnDisk.reproductionCount = confirmResult.attempts;
-    await writeFindingPacketToDisk(packetResult.dir, packetOnDisk);
-
     // Verify the persisted finding.json reflects the confirmation
     const updatedPacket = await readFindingPacket(packetResult.dir);
     expect(updatedPacket.lifecycleState).toBe('confirmed-semantic');
-    expect(updatedPacket.confirmationAttemptIds).toContain('attempt-1');
-    expect(updatedPacket.reproductionCount).toBe(1);
+    expect(updatedPacket.confirmationAttemptIds).toHaveLength(1);
+    expect(updatedPacket.reproductionCount).toBe(2);
 
     // Verify evidence manifest has link to trace
     expect(updatedPacket.evidenceManifest.traceId).toBeTruthy();
@@ -242,22 +224,13 @@ describe('Evidence/replay vertical slice', () => {
     expect(result.packet.replaySpec?.mode).toBe('http');
 
     // Confirm via replay
-    const confirmResult = await confirmFinding(
-      result.packet,
-      result.packet.replaySpec! as ReplaySpec,
-      { maxAttempts: 2, evidenceDir: join(result.dir, 'confirmations') },
-    );
+    const confirmResult = await confirmFromPacket(result.dir, {
+      maxAttempts: 2,
+    });
 
     expect(confirmResult.reproduced).toBe(true);
     expect(confirmResult.lifecycleState).toBe('confirmed-semantic');
     expect(confirmResult.attempts).toBeGreaterThanOrEqual(1);
-
-    // Persist confirmation evidence in finding.json
-    const packetOnDisk = await readFindingPacket(result.dir);
-    packetOnDisk.lifecycleState = confirmResult.lifecycleState;
-    packetOnDisk.confirmationAttemptIds.push(`http-attempt-${Date.now()}`);
-    packetOnDisk.reproductionCount += confirmResult.attempts;
-    await writeFindingPacketToDisk(result.dir, packetOnDisk);
 
     // Verify persisted state
     const updatedPacket = await readFindingPacket(result.dir);
@@ -289,8 +262,11 @@ describe('Evidence/replay vertical slice', () => {
   it('3. redacts planted secrets automatically before artifacts are written', async () => {
     const runDir = join(tmpDir, '3-redaction');
     await mkdir(runDir, { recursive: true });
-    const store = new ArtifactStore(runDir, 'run-redaction');
     const traceWriter = new TraceWriter(runDir, 'trace-redaction');
+    const store = new ArtifactStore(runDir, 'run-redaction', {
+      traceWriter,
+      attemptId: 'att-redact',
+    });
 
     // Plant a secret in a trace span attribute
     const secretToken = 'ghp_planted_test_token_abc123';
@@ -304,19 +280,9 @@ describe('Evidence/replay vertical slice', () => {
     });
     traceWriter.endSpan(spanId, 'ok');
 
-    // Apply redaction to the span attributes before persistence
-    const { attributes: redactedAttrs, redactions } = redactAttributes(
-      traceWriter.getSpans().find((s) => s.spanId === spanId)?.attributes as Record<string, unknown>,
-    );
-    expect(redactedAttrs['headers.authorization']).toBe('[REDACTED]');
+    const redactions = traceWriter.getRedactionSummary();
     expect(redactions.length).toBe(1);
-    expect(redactions[0].ruleId).toBe('authorization-header');
-
-    // Replace the unredacted attributes with redacted ones before flushing
-    const span = traceWriter.getSpans().find((s) => s.spanId === spanId);
-    if (span) {
-      span.attributes = redactedAttrs as Record<string, import('../src/trace/traceTypes.js').JsonValue>;
-    }
+    expect(redactions[0].ruleId).toContain('authorization');
 
     await traceWriter.flush();
 
@@ -329,20 +295,15 @@ describe('Evidence/replay vertical slice', () => {
     expect(traceContent).not.toContain(secretToken);
     expect(traceContent).toContain('[REDACTED]');
 
-    // Now write an artifact with the secret, applying redaction first
+    // Now write an artifact with the raw secret; the store redacts at write time.
     const rawPayload = {
       url: v1Fixture.baseUrl,
       headers: { authorization: `Bearer ${secretToken}` },
       body: { password: 'hunter2' },
     };
-    const { result: redactedPayload } = redactDeep(rawPayload);
-    expect((redactedPayload as any).headers.authorization).toBe('[REDACTED]');
-    expect((redactedPayload as any).body.password).toBe('[REDACTED]');
-
-    // Write the redacted version to the store
     const artifactRef = await store.writeJson(
       'http-request',
-      redactedPayload,
+      rawPayload,
       'request-redacted.json',
       { traceId: traceWriter.getTraceId(), spanId },
     );
@@ -379,7 +340,10 @@ describe('Evidence/replay vertical slice', () => {
       reproductionCount: 1,
       environment: { packId: 'test-pack' },
       evidenceManifest: store.buildManifest({ attemptId: 'att-redact', traceId: traceWriter.getTraceId() }),
-      redactionSummary: redactions,
+      redactionSummary: store.buildManifest({
+        attemptId: 'att-redact',
+        traceId: traceWriter.getTraceId(),
+      }).redactionSummary,
       expectedState: 'Secrets redacted',
       actualState: 'Secrets redacted',
       steps: ['Write secret', 'Redact', 'Persist'],
@@ -391,8 +355,10 @@ describe('Evidence/replay vertical slice', () => {
     const persistedFinding = JSON.parse(
       readFileSync(join(findDir, 'finding.json'), 'utf8'),
     ) as FindingPacketV2;
-    expect(persistedFinding.redactionSummary.length).toBe(1);
-    expect(persistedFinding.redactionSummary[0].ruleId).toBe('authorization-header');
+    expect(persistedFinding.redactionSummary.length).toBeGreaterThanOrEqual(3);
+    expect(persistedFinding.redactionSummary.some(
+      (entry) => entry.ruleId === 'authorization-header',
+    )).toBe(true);
 
     // Run a confirmation replay on the health endpoint to verify state persistence
     const healthSpec: ReplaySpec = {
@@ -523,42 +489,26 @@ describe('Evidence/replay vertical slice', () => {
     await writeFile(join(findDir, 'finding.json'), JSON.stringify(suspectPacket, null, 2), 'utf8');
 
     // Confirm via replay
-    const confirmResult = await confirmFinding(
-      suspectPacket,
-      suspectPacket.replaySpec!,
-      { maxAttempts: 2, evidenceDir: join(findDir, 'confirmations') },
-    );
+    const confirmResult = await confirmFromPacket(findDir, {
+      maxAttempts: 2,
+    });
 
     expect(confirmResult.reproduced).toBe(true);
     expect(confirmResult.lifecycleState).toBe('confirmed-semantic');
 
-    // Update packet on disk
-    const packetOnDisk = await readFindingPacket(findDir);
-    packetOnDisk.lifecycleState = confirmResult.lifecycleState;
-    packetOnDisk.confirmationAttemptIds.push('confirm-1');
-    packetOnDisk.reproductionCount = 1;
-    await writeFindingPacketToDisk(findDir, packetOnDisk);
-
     // Re-read from disk and verify
     const persisted = await readFindingPacket(findDir);
     expect(persisted.lifecycleState).toBe('confirmed-semantic');
-    expect(persisted.confirmationAttemptIds).toContain('confirm-1');
+    expect(persisted.confirmationAttemptIds).toHaveLength(1);
     expect(persisted.reproductionCount).toBe(1);
 
     // Confirm a second time
-    const confirmResult2 = await confirmFinding(
-      persisted,
-      persisted.replaySpec!,
-      { maxAttempts: 2, evidenceDir: join(findDir, 'confirmations-2') },
-    );
+    const confirmResult2 = await confirmFromPacket(findDir, {
+      maxAttempts: 2,
+      evidenceDir: join(findDir, 'confirmations-2'),
+    });
 
     expect(confirmResult2.reproduced).toBe(true);
-
-    // Update again
-    const packetOnDisk2 = await readFindingPacket(findDir);
-    packetOnDisk2.confirmationAttemptIds.push('confirm-2');
-    packetOnDisk2.reproductionCount += confirmResult2.attempts;
-    await writeFindingPacketToDisk(findDir, packetOnDisk2);
 
     // Verify cumulative counts
     const persisted2 = await readFindingPacket(findDir);
@@ -656,22 +606,13 @@ describe('Evidence/replay vertical slice', () => {
     });
 
     // Step E: Confirm the regression finding
-    const confirmResult = await confirmFinding(
-      packetResult.packet,
-      packetResult.packet.replaySpec! as ReplaySpec,
-      { maxAttempts: 2, evidenceDir: join(packetResult.dir, 'confirmations') },
-    );
+    const confirmResult = await confirmFromPacket(packetResult.dir, {
+      maxAttempts: 2,
+    });
 
     // v2 actually returns 403 with "Access Denied" so the replay confirms
     expect(confirmResult.reproduced).toBe(true);
     expect(confirmResult.lifecycleState).toBe('confirmed-semantic');
-
-    // Persist the confirmation
-    const packetOnDisk = await readFindingPacket(packetResult.dir);
-    packetOnDisk.lifecycleState = confirmResult.lifecycleState;
-    packetOnDisk.confirmationAttemptIds.push(`regression-confirm-${Date.now()}`);
-    packetOnDisk.reproductionCount = confirmResult.attempts;
-    await writeFindingPacketToDisk(packetResult.dir, packetOnDisk);
 
     // Verify evidence files have trace IDs
     const evidenceFiles = store.getArtifacts().filter((a) => a.traceId);

@@ -1,8 +1,9 @@
-import { readFile, mkdir, writeFile } from 'node:fs/promises';
+import { readFile, mkdir, writeFile, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { chromium, type Page, type BrowserContext } from 'playwright';
 import type { ReplaySpec, FindingPacketV2, FindingLifecycleState, RecordedAction, AssertionRecipe, LocatorRecipe } from '../trace/traceTypes.js';
+import { redactDeep } from '../trace/redaction.js';
 
 /**
  * Confirmation runner: executes replay specs to confirm or reject findings.
@@ -86,12 +87,12 @@ export async function confirmFinding(
         if (evidenceDir) {
           const attemptDir = path.join(evidenceDir, `attempt-${i + 1}`);
           await mkdir(attemptDir, { recursive: true });
-          await writeFile(path.join(attemptDir, 'response.json'), JSON.stringify({
+          await writeRedactedJson(path.join(attemptDir, 'response.json'), {
             status: response.status,
             headers: Object.fromEntries(response.headers.entries()),
             bodyPreview: body.slice(0, 2000),
             matched: reproduced,
-          }, null, 2), 'utf8');
+          });
           evidencePaths.push(attemptDir);
         }
 
@@ -110,9 +111,9 @@ export async function confirmFinding(
         if (evidenceDir) {
           const attemptDir = path.join(evidenceDir, `attempt-${i + 1}`);
           await mkdir(attemptDir, { recursive: true });
-          await writeFile(path.join(attemptDir, 'error.json'), JSON.stringify({
+          await writeRedactedJson(path.join(attemptDir, 'error.json'), {
             error: String(err),
-          }, null, 2), 'utf8');
+          });
           evidencePaths.push(attemptDir);
         }
       }
@@ -220,7 +221,64 @@ export async function confirmFromPacket(
     };
   }
 
-  return confirmFinding(packet, spec, options);
+  const result = await confirmFinding(packet, spec, {
+    ...options,
+    evidenceDir: options?.evidenceDir ?? path.join(packetDir, 'confirmations'),
+  });
+  await persistConfirmationResult(packetDir, packet, result);
+  return result;
+}
+
+/**
+ * Persist a confirmation result back into the finding packet atomically.
+ */
+export async function persistConfirmationResult(
+  packetDir: string,
+  packet: FindingPacketV2,
+  result: ConfirmationResult,
+): Promise<FindingPacketV2> {
+  const nextState = result.lifecycleState;
+  if (
+    nextState !== packet.lifecycleState
+    && !isValidTransition(packet.lifecycleState, nextState)
+  ) {
+    throw new Error(
+      `Invalid finding lifecycle transition: ${packet.lifecycleState} -> ${nextState}`,
+    );
+  }
+
+  const updated: FindingPacketV2 = {
+    ...packet,
+    lifecycleState: nextState,
+    confirmationAttemptIds: [
+      ...packet.confirmationAttemptIds,
+      ...Array.from(
+        { length: result.attempts },
+        () => `confirmation-${randomUUID().replace(/-/g, '').slice(0, 12)}`,
+      ),
+    ],
+    reproductionCount: packet.reproductionCount + (result.reproduced ? 1 : 0),
+  };
+
+  const jsonPath = path.join(packetDir, 'finding.json');
+  const tempPath = `${jsonPath}.${process.pid}.${randomUUID()}.tmp`;
+  await writeRedactedJson(tempPath, updated);
+  await rename(tempPath, jsonPath);
+
+  const markdownPath = path.join(packetDir, 'finding.md');
+  try {
+    const markdown = await readFile(markdownPath, 'utf8');
+    const updatedMarkdown = /^- Lifecycle: .*$/m.test(markdown)
+      ? markdown.replace(/^- Lifecycle: .*$/m, `- Lifecycle: ${nextState}`)
+      : markdown;
+    if (updatedMarkdown !== markdown) {
+      await writeFile(markdownPath, updatedMarkdown, 'utf8');
+    }
+  } catch {
+    // JSON is canonical; legacy/minimal packets may omit Markdown.
+  }
+
+  return updated;
 }
 
 // ---------------------------------------------------------------------------
@@ -251,6 +309,11 @@ export function isValidTransition(
 
 // Re-export for convenience
 export type { FindingLifecycleState };
+
+async function writeRedactedJson(filePath: string, value: unknown): Promise<void> {
+  const { result } = redactDeep(value);
+  await writeFile(filePath, JSON.stringify(result, null, 2), 'utf8');
+}
 
 // ---------------------------------------------------------------------------
 // Browser replay execution with improved locator support
