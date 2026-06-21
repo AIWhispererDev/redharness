@@ -1,6 +1,6 @@
-# QA Harness
+# RedHarness
 
-General QA, regression, and safe security/pentest harness with app-specific QA packs.
+Agent evaluation, regression, and safe red-team security harness with app-specific QA packs.
 
 The current implementation is centered on the `pocket-socrates` pack, but the core is designed to become app-agnostic:
 

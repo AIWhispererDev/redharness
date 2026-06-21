@@ -1,7 +1,7 @@
 {
-  "name": "qa-harness",
+  "name": "redharness",
   "version": "1.0.0",
-  "description": "General QA, regression, and safe security/pentest harness with app-specific QA packs",
+  "description": "Agent evaluation, regression, & safe red-team security harness with app-specific QA packs",
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -14,20 +14,30 @@
     "save-auth": "tsx src/saveAuth.ts",
     "save-auth-cdp": "tsx src/saveAuthFromCdp.ts"
   },
-  "keywords": ["qa", "testing", "regression", "security", "pentest"],
-  "author": "",
-  "license": "ISC",
+  "keywords": ["qa", "testing", "regression", "security", "pentest", "red-team", "agent-evaluation", "agentic-testing"],
+  "author": "AIWhispererDev",
+  "license": "MIT",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AIWhispererDev/redharness.git"
+  },
+  "homepage": "https://github.com/AIWhispererDev/redharness#readme",
+  "bugs": {
+    "url": "https://github.com/AIWhispererDev/redharness/issues"
+  },
   "engines": {
     "node": ">=22.0.0"
   },
   "bin": {
+    "redharness": "./dist/src/cli.js",
     "qa-harness": "./dist/src/cli.js"
   },
   "files": [
     "dist/",
     "packs/",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "dependencies": {
     "commander": "^15.0.0",

@@ -26,6 +26,13 @@ playwright-report/
 !.env.sample
 *.local
 
+# Agent tooling
+AGENTS.md
+
+# Internal research and planning
+docs/deep-research-report.md
+docs/implementation/
+
 # Logs and temporary files
 *.log
 *.log.*
