@@ -536,11 +536,16 @@ program
   .option('--provider <mode>', 'agent provider mode: fake|replay|live', 'fake')
   .option('--output-dir <dir>', 'output directory for results')
   .option('--findings', 'write finding packets for failures', false)
+  .option('--fixture', 'start the controlled local agent fixture')
   .description('Evaluate agent scenarios from a dataset and produce graded results')
   .action(async (packId, datasetId, options) => {
     const packDir = defaultPackDir(packId);
     const pack = await loadPackFromDir(packDir);
     if (!pack.baseUrl) { console.error('Pack has no baseUrl'); process.exitCode = 1; return; }
+    const fixture = options.fixture
+      ? await (await import('./fixtures/releaseWebApp.js')).startAgentFixture(false)
+      : undefined;
+    const baseUrl = fixture?.baseUrl ?? pack.baseUrl;
 
     const dsDir = path.resolve(packDir, 'datasets', datasetId);
     const { loadScenariosFromDir, loadDatasetManifest, resolveScenarioAgent } = await import('./scenarios/loader.js');
@@ -565,6 +570,7 @@ program
     if (scenarios.length === 0) {
       console.error('No agent scenarios matched the selection');
       process.exitCode = 1;
+      await fixture?.stop();
       return;
     }
 
@@ -609,7 +615,7 @@ program
 
       const result = await runScenario(enrichedScenario, {
         packDir,
-        baseUrl: pack.baseUrl,
+        baseUrl,
         headless: true,
         outputDir,
         graders,
@@ -646,7 +652,7 @@ program
         for (const trial of result.trials.filter((t) => t.status !== 'passed')) {
           await writeFindingPacketV2({
             packId,
-            baseUrl: pack.baseUrl,
+            baseUrl,
             title: `[Agent] ${scenario.title} (trial ${trial.trial}): ${trial.status}`,
             severity: trial.status === 'error' ? 'Major' : 'Minor',
             category: 'agent-evaluation',
@@ -674,6 +680,7 @@ program
     }
 
     console.log(`\nResults in: ${outputDir}`);
+    await fixture?.stop();
   });
 
 program
@@ -841,7 +848,7 @@ program
         isCiEnvironment: !!process.env.CI,
       });
       const checkpointId = options.checkpointId ?? 'latest';
-      const result = await runtime.resume(checkpointId).catch(() => runtime.run());
+      const result = await runtime.resume(checkpointId);
       const outputDir = options.outputDir ?? path.resolve('runs', packId, options.runId);
       await mkdir(outputDir, { recursive: true });
       await writeFile(path.join(outputDir, 'agent-result.json'), JSON.stringify(result, null, 2));
@@ -895,6 +902,7 @@ program
 
 program
   .command('redteam')
+  .alias('ai-redteam')
   .argument('<pack>', 'pack id')
   .option('--dataset <id>', 'dataset id (default: redteam)')
   .option('--split <name>', 'dataset split: smoke|release|adversarial|holdout')
@@ -906,6 +914,7 @@ program
   .option('--output-dir <dir>', 'output directory')
   .option('--write-findings', 'write finding packets with evidence', false)
   .option('--release-gate', 'evaluate release gate policy', false)
+  .option('--fixture', 'start the controlled local agent fixture')
   .description('Run OWASP Agentic Top 10 red-team security evaluation with dataset-driven scenarios, seeds, and per-trial benign controls')
   .action(async (packId, options) => {
     const { attackRegistry } = await import('./redteam/attackRegistry.js');
@@ -918,6 +927,10 @@ program
     const { createExploratoryQaIntent } = await import('./agent/intent.js');
     const pack = await loadPackFromDir(defaultPackDir(packId));
     if (!pack.baseUrl) throw new Error(`Pack ${packId} has no baseUrl`);
+    const fixture = options.fixture
+      ? await (await import('./fixtures/releaseWebApp.js')).startAgentFixture(false)
+      : undefined;
+    const baseUrl = fixture?.baseUrl ?? pack.baseUrl;
 
     // Resolve dataset-driven attack selection
     const datasetId = options.dataset ?? 'redteam';
@@ -942,6 +955,7 @@ program
     if (resolvedAttacks.length === 0) {
       console.error('No attacks matched the selection');
       process.exitCode = 1;
+      await fixture?.stop();
       return;
     }
 
@@ -975,7 +989,7 @@ program
       trials: trialCount,
       seed,
       cleanupStrategy,
-      fixtureBaseUrl: pack.baseUrl!,
+      fixtureBaseUrl: baseUrl,
       captureInitialState: true,
       captureFinalState: true,
       compareBenignUtility: true,
@@ -992,7 +1006,7 @@ program
             policy: {
               defaultToolApproval: 'auto',
               toolPolicies: [],
-              allowedOrigins: [new URL(pack.baseUrl!).origin],
+              allowedOrigins: [new URL(baseUrl).origin],
               prohibitedActions: ['delete', 'exec', 'exfiltrate'],
               requireHumanForStateChanges: false,
             },
@@ -1006,7 +1020,7 @@ program
           },
           intent: createExploratoryQaIntent({
             userGoal: renderedPrompt,
-            baseUrl: pack.baseUrl!,
+            baseUrl,
             allowedTools: agentToolNames,
           }),
           modelAdapter: new FakeModelAdapter({
@@ -1014,7 +1028,7 @@ program
           }),
           runId: `redteam-${attack.id}-trial-${trialSeed.slice(0, 8)}`,
           isCiEnvironment: true,
-          fixtureBaseUrl: pack.baseUrl!,
+          fixtureBaseUrl: baseUrl,
         });
       },
       benignRuntimeFactory: async (attack, trialSeed) => {
@@ -1056,7 +1070,7 @@ program
             policy: {
               defaultToolApproval: 'auto',
               toolPolicies: [],
-              allowedOrigins: [new URL(pack.baseUrl!).origin],
+              allowedOrigins: [new URL(baseUrl).origin],
               prohibitedActions: ['delete', 'exec', 'exfiltrate'],
               requireHumanForStateChanges: false,
             },
@@ -1070,13 +1084,13 @@ program
           },
           intent: createExploratoryQaIntent({
             userGoal: `Benign control for ${attack.id}: read fixture state`,
-            baseUrl: pack.baseUrl!,
+            baseUrl,
             allowedTools: ['fixture_read_state'],
           }),
           modelAdapter: benignAdapter,
           runId: `redteam-benign-${attack.id}-${trialSeed.slice(0, 8)}`,
           isCiEnvironment: true,
-          fixtureBaseUrl: pack.baseUrl!,
+          fixtureBaseUrl: baseUrl,
         });
       },
     });
@@ -1114,7 +1128,7 @@ program
         outputDir,
         runId,
         packId,
-        baseUrl: pack.baseUrl!,
+        baseUrl,
         environment: envName,
       });
       console.log(`\nWritten ${packets.length} finding packet(s) to ${outputDir}/findings/`);
@@ -1130,6 +1144,7 @@ program
 
     console.log(summarizeRedTeam(scenarios));
     console.log(`\nReport: ${path.join(outputDir, 'redteam.json')}`);
+    await fixture?.stop();
     console.log(`Summary: ${path.join(outputDir, 'summary.md')}`);
   });
 
@@ -1587,6 +1602,96 @@ program
       writeFindings: options.writeFindings,
     });
     console.log(renderSecuritySmokeReport(pack.name, result));
+    if (!result.ok) process.exitCode = 1;
+  });
+
+program
+  .command('bug-hunt')
+  .argument('<pack>')
+  .option('--url <url>', 'target URL override')
+  .option('--storage-state <file>')
+  .option('--confirm-runs <n>', 'confirmation attempts', '2')
+  .option('--video', 'retain a browser video for the run')
+  .option('--output-dir <dir>')
+  .description('Run safe security and blackbox probes, confirm findings, and package evidence')
+  .action(async (packId, options) => {
+    const loaded = await loadPackFromDir(defaultPackDir(packId));
+    const pack = {
+      ...loaded,
+      baseUrl: options.url ?? loaded.baseUrl,
+    };
+    if (!pack.baseUrl) throw new Error(`Pack ${packId} has no baseUrl`);
+
+    const outputDir = path.resolve(
+      process.cwd(),
+      options.outputDir ?? path.join('artifacts', packId, 'bug-hunt'),
+    );
+    await mkdir(outputDir, { recursive: true });
+
+    const security = await runSecuritySmoke(pack, {
+      storageState: options.storageState,
+      outputDir: path.join(outputDir, 'security'),
+      writeFindings: true,
+    });
+    const blackbox = await runBlackboxPentest(pack, {
+      url: pack.baseUrl,
+      outputDir: path.join(outputDir, 'blackbox'),
+      confirmRuns: Number(options.confirmRuns ?? 2),
+    });
+
+    if (options.video) {
+      const { TraceWriter } = await import('./trace/traceWriter.js');
+      const { ArtifactStore } = await import('./artifacts/artifactStore.js');
+      const { createBrowserSession } = await import('./trace/browserSessionFactory.js');
+      const traceWriter = new TraceWriter(outputDir, `bug-hunt-${Date.now()}`);
+      const store = new ArtifactStore(outputDir, `bug-hunt-${Date.now()}`, {
+        traceWriter,
+        attemptId: 'bug-hunt-video',
+      });
+      const session = await createBrowserSession({
+        runDir: outputDir,
+        artifactStore: store,
+        traceWriter,
+        video: 'retain',
+        headless: true,
+        storageState: options.storageState,
+      });
+      await session.page.goto(pack.baseUrl, { waitUntil: 'networkidle' });
+      await session.close('failed');
+      await store.saveManifest('bug-hunt-video', traceWriter.getTraceId());
+    }
+
+    const result = {
+      ok: security.ok && blackbox.ok,
+      security: {
+        ok: security.ok,
+        checks: security.checks.length,
+      },
+      blackbox: {
+        ok: blackbox.ok,
+        checks: blackbox.checks.length,
+        confirmed: blackbox.checks.filter((check) => check.state === 'confirmed').length,
+      },
+    };
+    await writeFile(
+      path.join(outputDir, 'summary.json'),
+      JSON.stringify(result, null, 2),
+      'utf8',
+    );
+    await writeFile(
+      path.join(outputDir, 'summary.md'),
+      [
+        `# ${pack.name} bug hunt`,
+        '',
+        `Status: ${result.ok ? 'passed' : 'failed'}`,
+        `Security checks: ${result.security.checks}`,
+        `Blackbox checks: ${result.blackbox.checks}`,
+        `Confirmed findings: ${result.blackbox.confirmed}`,
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    console.log(JSON.stringify(result, null, 2));
     if (!result.ok) process.exitCode = 1;
   });
 
