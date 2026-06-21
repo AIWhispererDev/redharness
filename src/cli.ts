@@ -1624,7 +1624,7 @@ program
   .option('--headed')
   .option('--output-dir <dir>')
   .option('--write-findings', 'write Notion-ready finding packets for medium/high failures')
-  .description('Run safe HackZero-style security smoke checks')
+  .description('Run safe security smoke checks: headers, cookies, exposure, auth gates, bundles')
   .action(async (packId, options) => {
     const pack = await loadPackFromDir(defaultPackDir(packId));
     const result = await runSecuritySmoke(pack, {

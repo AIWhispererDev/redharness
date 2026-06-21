@@ -4,7 +4,7 @@
 
 ## Goal
 
-Implement the first HackZero-style slice: safe security smoke checks plus Notion-ready finding packet generation.
+Implement safe security smoke checks plus Notion-ready finding packet generation.
 
 ## Architecture
 

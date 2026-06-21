@@ -240,7 +240,7 @@ Full PRD and spec docs: [`docs/prd/`](docs/prd/)
 | [Agent Runtime & Safety](docs/prd/agentic-harness-04-agent-runtime-safety.md) | Bounded agent, policy engine, budgets |
 | [Agentic Security & Red-Team](docs/prd/agentic-harness-05-agentic-security-red-team.md) | OWASP 2026, attack mutations, findings |
 | [Experiments, CI & MCP](docs/prd/agentic-harness-06-experiments-ci-monitoring-mcp.md) | Experiments, gates, OTel, MCP |
-| [HackZero Security Platform](docs/prd/hackzero-style-qa-security-platform.md) | Pentest, finding packets, replay |
+| [Security Platform](docs/prd/qa-security-platform.md) | Pentest, finding packets, replay |
 
 ---
 

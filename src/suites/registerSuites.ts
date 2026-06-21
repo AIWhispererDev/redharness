@@ -443,7 +443,7 @@ export function registerAllSuites(): void {
     skippedAdapter(
       'security-smoke',
       'Security Smoke',
-      'Safe HackZero-style security smoke checks: headers, cookies, exposure, auth gates, bundles.',
+      'Safe security smoke checks: headers, cookies, exposure, auth gates, bundles.',
       ['smoke', 'security', 'release'],
       'required',
       ['baseUrl'],

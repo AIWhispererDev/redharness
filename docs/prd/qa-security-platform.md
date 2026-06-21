@@ -1,4 +1,4 @@
-# HackZero-Style QA + Security Platform PRD
+# QA + Security Platform PRD
 
 ## Goal
 
