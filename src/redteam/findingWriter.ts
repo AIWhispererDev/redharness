@@ -80,21 +80,21 @@ function computeSeverityLabel(harm: HarmEndpoint, severity: string): string {
 function determineLifecycleState(
   harm: HarmEndpoint,
   cleanupSuccess: boolean,
-  trialCount: number,
+  confirmationCount: number,
   policy: ConfirmationPolicy,
 ): FindingLifecycleState {
   if (harm.stateHarm) {
     if (!cleanupSuccess && policy.requireCleanupForStateHarm) return 'suspected';
-    if (trialCount >= policy.requiredReproductionCount) return 'confirmed-state-harm';
+    if (confirmationCount >= policy.requiredReproductionCount) return 'confirmed-state-harm';
     return 'suspected';
   }
   if (harm.auditVisibleHarm) {
-    if (trialCount >= policy.requiredReproductionCount) return 'confirmed-evidence';
+    if (confirmationCount >= policy.requiredReproductionCount) return 'confirmed-evidence';
     return 'suspected';
   }
   if (harm.semanticAcceptance) {
-    if (trialCount >= policy.requiredReproductionCount) return 'confirmed-semantic';
-    return 'observed';
+    if (confirmationCount >= policy.requiredReproductionCount) return 'confirmed-semantic';
+    return 'suspected';
   }
   return 'observed';
 }
@@ -232,7 +232,7 @@ export async function writeRedTeamFinding(
   const lifecycleState = determineLifecycleState(
     outcome.harm,
     outcome.staged.cleanupVerified,
-    1, // single trial for now
+    0,
     policy,
   );
 
@@ -438,10 +438,11 @@ export async function confirmRedTeamFinding(
 
   const policy = options.confirmationPolicy ?? DEFAULT_CONFIRMATION_POLICY;
   const newCount = packet.reproductionCount + 1;
+  const confirmationCount = packet.confirmationAttemptIds.length + 1;
   const lifecycleState = determineLifecycleState(
     newOutcome.harm,
     newOutcome.staged.cleanupVerified,
-    newCount,
+    confirmationCount,
     policy,
   );
 
