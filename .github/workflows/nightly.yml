@@ -28,24 +28,24 @@ jobs:
 
       - name: Nightly fixture agent evaluation (deterministic)
         run: |
-          npm run qa -- agent-eval fixture-web smoke \
+          npm run qa -- agent-eval fixture-agent core \
+            --split smoke \
             --provider fake \
-            --headed=false \
+            --fixture \
             --findings
 
       - name: Nightly fixture red-team evaluation (deterministic)
         run: |
-          npm run qa -- redteam fixture-web \
+          npm run qa -- redteam fixture-agent \
             --dataset redteam \
             --split smoke \
             --provider fake \
-            --headed=false \
+            --fixture \
             --write-findings \
             --release-gate
 
       - name: Nightly scheduled run
-        run: |
-          npm run qa -- scheduled fixture-web --profile release
+        run: npm run release:ci
 
       - name: Upload nightly fixture reports
         if: always()
@@ -71,7 +71,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: nightly-fixture-traces
-          path: traces/
+          path: |
+            runs/**/traces/
+            artifacts/**/traces/
           if-no-files-found: warn
 
   nightly-retention:

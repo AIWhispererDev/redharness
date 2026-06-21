@@ -21,14 +21,6 @@
   "engines": {
     "node": ">=22.0.0"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/user/qa-harness.git"
-  },
-  "bugs": {
-    "url": "https://github.com/user/qa-harness/issues"
-  },
-  "homepage": "https://github.com/user/qa-harness#readme",
   "bin": {
     "qa-harness": "./dist/src/cli.js"
   },

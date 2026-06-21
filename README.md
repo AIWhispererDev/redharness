@@ -10,7 +10,9 @@ The current implementation is centered on the `pocket-socrates` pack, but the co
 - run long-thread and completion checks for AI apps
 - run mobile, billing, language, workshop, and record/export smoke checks
 - run safe HackZero-style security smoke and blackbox/whitebox pentest probes
-- generate markdown/JSON summaries, screenshots, console/network artifacts, and draft-only finding packets
+- evaluate bounded agents and OWASP-aligned red-team datasets against controlled fixtures
+- generate Markdown/JSON/JUnit/SARIF reports, traces, screenshots, console/network artifacts, video, and draft-only finding packets
+- expose governed run, catalog, baseline, finding, and approval operations through MCP
 
 > Safety: this harness is for apps you own or are explicitly authorized to test. Pentest-style commands are intentionally non-destructive: no brute force, no spam/load tests, no payment abuse, no credential stuffing, and no destructive mutations.
 
@@ -32,8 +34,8 @@ npm test
 Current verified test count at time of writing:
 
 ```text
-42 test files
-238+ tests
+84 test files
+719 tests
 ```
 
 ---
@@ -602,27 +604,32 @@ Minor UX/form validation
 The core harness is in an active development state with the following baseline:
 
 ```text
-TypeScript: 95 source files, 45 test files
-Tests:      42 files, 238+ tests passed
-Suites:     18 registered suites
+TypeScript: 206 files, 0 errors
+Tests:      84 files, 719 tests
+Suites:     19 registered suites
 ```
 
-### Delivered (PRDs 01-06)
+### Delivered
 
 - Truthful execution statuses and suite registry
 - Run coordination, retries, cancellation, resume, and trace spans
 - Scenario and dataset schemas
-- Deterministic graders and reliability helpers
-- Bounded agent runtime primitives (policy engine, budgets, checkpoints, approvals)
-- OWASP-aligned red-team definitions (attack mutations, canaries, harm endpoints)
+- Deterministic, state, trajectory, rule, rubric, pairwise, and human-review graders
+- Bounded agent runtime with provider adapters, browser tools, policy enforcement, budgets, durable checkpoints, approvals, cancellation, and trace evidence
+- Dataset-driven OWASP-aligned red-team execution with seeded trials, benign controls, cleanup verification, findings, and release gates
 - Experiments, comparison, gates
 - Reporters (JUnit, SARIF, GitHub)
 - OTel export
-- Service API and MCP protocol handling
+- Transactional SQLite catalog, recovery, named baselines, canonical findings, retention, and scheduled workflows
+- Service API and policy-governed MCP lifecycle
+- Deterministic CI, nightly fixture workflows, optional live smoke, and release certification
 
-### In progress (PRDs 07-11)
+### Release status
 
-The [remaining implementation plan](docs/prd/agentic-harness-remaining-implementation-plan.md) defines the ordered delivery:
+The deterministic implementation is complete. Final release certification still requires a clean
+GitHub Actions run from committed state and optional authenticated/live evidence when credentials
+are configured. Legacy browser suites continue to migrate incrementally onto the shared browser
+session instrumentation.
 
 1. **Repository Integrity & Release Baseline** — Fix ignored sources, commit all files, CI, empty-run policy
 2. **Evidence, Trace & Replay Integration** — Real suites emit scoped evidence and executable replay
