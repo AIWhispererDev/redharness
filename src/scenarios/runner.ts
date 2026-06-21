@@ -175,6 +175,24 @@ export async function runScenario(
           ? await browser.newContext({ storageState: options.storageState })
           : await browser.newContext();
         const page = await context.newPage();
+        const browserDiagnostics = {
+          consoleErrors: [] as string[],
+          failedRequests: [] as string[],
+          serverErrors: [] as string[],
+        };
+        page.on('console', (message) => {
+          if (message.type() === 'error') browserDiagnostics.consoleErrors.push(message.text());
+        });
+        page.on('requestfailed', (request) => {
+          browserDiagnostics.failedRequests.push(
+            `${request.method()} ${request.url()} — ${request.failure()?.errorText ?? 'failed'}`,
+          );
+        });
+        page.on('response', (response) => {
+          if (response.status() >= 500) {
+            browserDiagnostics.serverErrors.push(`${response.status()} ${response.url()}`);
+          }
+        });
 
         try {
           const setupActions = scenario.setup ?? [];
@@ -187,7 +205,12 @@ export async function runScenario(
           }
 
           for (const assertion of scenario.expected) {
-            const result = await evaluateAssertion(page, assertion, captures);
+            const result = await evaluateAssertion(
+              page,
+              assertion,
+              captures,
+              browserDiagnostics,
+            );
             assertions.push({
               name: assertion.assertion,
               passed: result.passed,

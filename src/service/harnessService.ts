@@ -527,6 +527,64 @@ export class HarnessService {
     };
   }
 
+  /** Promote a confirmed finding with browser replay evidence into reviewed regression coverage. */
+  async promoteFindingToDataset(options: {
+    findingId: string;
+    packId: string;
+    datasetId: string;
+    reviewerId: string;
+    reviewNotes?: string;
+    split?: import('../datasets/manifest.js').DatasetSplit;
+    scenarioId?: string;
+  }) {
+    const finding = await this.catalog.getFinding(options.findingId);
+    if (!finding) throw new Error(`Finding not found: ${options.findingId}`);
+
+    const replay = Array.isArray(finding.replays)
+      ? (finding.replays as Array<{ mode?: string; spec?: unknown }>)
+        .find((candidate) => candidate.mode === 'browser')
+      : undefined;
+    if (!replay?.spec) {
+      throw new Error(
+        `Finding "${options.findingId}" does not have executable browser replay evidence`,
+      );
+    }
+
+    const evidence = Array.isArray(finding.evidence)
+      ? finding.evidence as Array<Record<string, unknown>>
+      : [];
+    const traceId = evidence.find((item) => item.trace_id)?.trace_id;
+    const { promoteFindingToDataset } = await import('../datasets/findingPromotion.js');
+    const result = await promoteFindingToDataset({
+      datasetDir: path.resolve(
+        this.options.packsDir,
+        options.packId,
+        'datasets',
+        options.datasetId,
+      ),
+      reviewerId: options.reviewerId,
+      reviewNotes: options.reviewNotes,
+      split: options.split,
+      scenarioId: options.scenarioId,
+      finding: {
+        findingId: String(finding.finding_id),
+        runId: String(finding.run_id),
+        title: String(finding.title),
+        lifecycleState: String(finding.lifecycle_state),
+        originatingSuiteId: finding.originating_suite_id
+          ? String(finding.originating_suite_id)
+          : undefined,
+        expectedState: finding.expected_state
+          ? String(finding.expected_state)
+          : undefined,
+        traceId: traceId ? String(traceId) : undefined,
+        replaySpec: replay.spec as import('../trace/traceTypes.js').BrowserReplaySpec,
+      },
+    });
+    await this.catalog.updateFindingLifecycle(options.findingId, 'regression');
+    return result;
+  }
+
   // ---------------------------------------------------------------------------
   // Report generation
   // ---------------------------------------------------------------------------

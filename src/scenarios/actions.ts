@@ -4,10 +4,15 @@
  * Each action maps to a Playwright operation. Captures are stored for
  * later assertion use.
  */
-import type { Page } from 'playwright';
+import type { Locator, Page } from 'playwright';
 import type { ScenarioAction, ScenarioAssertion } from './schema.js';
 
 export type CaptureStore = Map<string, string>;
+export type BrowserDiagnostics = {
+  consoleErrors: string[];
+  failedRequests: string[];
+  serverErrors: string[];
+};
 
 /** Resolve a URL against a base URL. */
 export function resolveUrl(url: string, baseUrl?: string): string {
@@ -131,6 +136,7 @@ export async function evaluateAssertion(
   page: Page,
   assertion: ScenarioAssertion,
   captures: CaptureStore,
+  diagnostics?: BrowserDiagnostics,
 ): Promise<{ passed: boolean; message: string }> {
   switch (assertion.assertion) {
     case 'page_contains_capture': {
@@ -150,11 +156,38 @@ export async function evaluateAssertion(
     case 'element_visible': {
       const locator = assertion.role
         ? page.getByRole(assertion.role as any, { name: assertion.name })
+        : assertion.text
+          ? page.getByText(assertion.text)
         : assertion.selector
           ? page.locator(assertion.selector)
           : page.locator('body');
-      const visible = await locator.isVisible().catch(() => false);
+      const visible = await anyLocatorMatches(locator, async (candidate) =>
+        candidate.isVisible().catch(() => false),
+      );
       return { passed: visible, message: visible ? 'Element visible' : 'Element not visible' };
+    }
+
+    case 'element_in_viewport': {
+      const locator = assertion.text
+        ? page.getByText(assertion.text)
+        : assertion.selector
+          ? page.locator(assertion.selector)
+          : page.locator('body');
+      const passed = await anyLocatorMatches(locator, async (candidate) =>
+        candidate.evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          return rect.width > 0
+            && rect.height > 0
+            && rect.bottom > 0
+            && rect.right > 0
+            && rect.top < window.innerHeight
+            && rect.left < window.innerWidth;
+        }).catch(() => false),
+      );
+      return {
+        passed,
+        message: passed ? 'Element is in the viewport' : 'Element is not in the viewport',
+      };
     }
 
     case 'text_present': {
@@ -163,10 +196,57 @@ export async function evaluateAssertion(
       return { passed, message: passed ? `Text "${assertion.text}" found` : `Text "${assertion.text}" not found` };
     }
 
+    case 'no_console_errors':
+      return evaluateDiagnosticAssertion(
+        diagnostics?.consoleErrors ?? [],
+        assertion.ignorePatterns,
+        'console errors',
+      );
+
+    case 'no_failed_requests':
+      return evaluateDiagnosticAssertion(
+        diagnostics?.failedRequests ?? [],
+        assertion.ignorePatterns,
+        'failed requests',
+      );
+
+    case 'no_server_errors':
+      return evaluateDiagnosticAssertion(
+        diagnostics?.serverErrors ?? [],
+        assertion.ignorePatterns,
+        'server errors',
+      );
+
     case 'state_equals':
       return { passed: false, message: 'State-diff assertion requires fixture environment' };
 
     default:
       return { passed: false, message: `Unknown assertion: ${(assertion as any).assertion}` };
   }
+}
+
+async function anyLocatorMatches(
+  locator: Locator,
+  predicate: (candidate: Locator) => Promise<boolean>,
+): Promise<boolean> {
+  const count = await locator.count().catch(() => 0);
+  for (let index = 0; index < count; index += 1) {
+    if (await predicate(locator.nth(index))) return true;
+  }
+  return false;
+}
+
+function evaluateDiagnosticAssertion(
+  values: string[],
+  ignorePatterns: string[] | undefined,
+  label: string,
+): { passed: boolean; message: string } {
+  const patterns = (ignorePatterns ?? []).map((pattern) => new RegExp(pattern, 'i'));
+  const relevant = values.filter((value) => !patterns.some((pattern) => pattern.test(value)));
+  return relevant.length === 0
+    ? { passed: true, message: `No ${label} observed` }
+    : {
+        passed: false,
+        message: `${relevant.length} ${label} observed: ${relevant.slice(0, 3).join(' | ')}`,
+      };
 }

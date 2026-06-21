@@ -1269,6 +1269,38 @@ program
   });
 
 program
+  .command('promote-finding')
+  .argument('<finding-id>', 'confirmed finding ID')
+  .argument('<pack-id>', 'target pack ID')
+  .argument('<dataset-id>', 'target dataset ID')
+  .requiredOption('--reviewer <id>', 'human reviewer ID')
+  .option('--notes <text>', 'review notes')
+  .option('--split <name>', 'dataset split', 'release')
+  .option('--scenario-id <id>', 'override generated scenario ID')
+  .description('Promote confirmed browser replay evidence into reviewed regression coverage')
+  .action(async (findingId, packId, datasetId, options) => {
+    const { HarnessService } = await import('./service/harnessService.js');
+    const service = new HarnessService();
+    try {
+      const result = await service.promoteFindingToDataset({
+        findingId,
+        packId,
+        datasetId,
+        reviewerId: options.reviewer,
+        reviewNotes: options.notes,
+        split: options.split,
+        scenarioId: options.scenarioId,
+      });
+      console.log(JSON.stringify(result, null, 2));
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+    } finally {
+      service.close();
+    }
+  });
+
+program
   .command('generate-report')
   .argument('<format>', 'junit | sarif | github-summary')
   .argument('<run-id>', 'run ID')

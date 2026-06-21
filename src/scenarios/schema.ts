@@ -122,4 +122,14 @@ export interface ScenarioDefinition {
   };
   /** Provider adapter mode for agent scenarios. */
   providerMode?: 'fake' | 'replay' | 'live';
+  /** Audit trail for scenarios promoted from observed production/run evidence. */
+  provenance?: {
+    source: 'manual' | 'finding';
+    findingId?: string;
+    runId?: string;
+    traceId?: string;
+    promotedAt?: string;
+    reviewerId?: string;
+    reviewNotes?: string;
+  };
 }
