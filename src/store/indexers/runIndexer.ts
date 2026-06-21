@@ -64,7 +64,7 @@ export function indexRun(
       manifest.packId,
       manifest.status,
       manifest.profile ?? null,
-      manifest.source,
+      manifest.source ?? 'local',
       manifest.startedAt,
       manifest.endedAt ?? null,
       manifest.durationMs ?? null,

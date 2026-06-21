@@ -6,7 +6,7 @@
  * It deletes and recreates the catalog atomically from run directories.
  */
 
-import { mkdir, readdir, rename, rm, copyFile } from 'node:fs/promises';
+import { access, mkdir, readdir, rename, rm, copyFile } from 'node:fs/promises';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { openCatalog, type Migration } from './migrations/runner.js';
@@ -91,7 +91,17 @@ export async function rebuildCatalog(
       if (!packEntry.isDirectory() || packEntry.name === '.catalog') continue;
       const packPath = path.join(resolvedRunsDir, packEntry.name);
 
-      // Try nested layout first: runs/<pack>/<run>
+      // A directory with run.json is always a flat run, even when it contains
+      // nested evidence/findings directories.
+      const isFlatRun = await access(path.join(packPath, 'run.json'))
+        .then(() => true)
+        .catch(() => false);
+      if (isFlatRun) {
+        if (await indexRunDirectory(database, packPath)) totalRuns++;
+        continue;
+      }
+
+      // Otherwise try nested layout: runs/<pack>/<run>
       const subEntries = await readdir(packPath, { withFileTypes: true }).catch(() => []);
       const runSubDirs = subEntries.filter((e) => e.isDirectory());
 
@@ -101,12 +111,6 @@ export async function rebuildCatalog(
           if (await indexRunDirectory(database, runPath)) {
             totalRuns++;
           }
-        }
-      } else {
-        // Flat layout: runs/<run-id> (no pack nesting)
-        // But at this level, packPath is the "run" and we determine packId from manifest
-        if (await indexRunDirectory(database, packPath)) {
-          totalRuns++;
         }
       }
     }

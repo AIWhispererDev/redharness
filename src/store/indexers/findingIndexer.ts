@@ -56,6 +56,14 @@ export function indexRunFindings(
 
     if (!packet.findingId) continue;
 
+    const requestedAttemptId = packet.initialAttemptId ?? null;
+    const indexedAttemptId = requestedAttemptId
+      && database.prepare(
+        'SELECT 1 FROM suite_attempts WHERE attempt_id = ?',
+      ).get(requestedAttemptId)
+      ? requestedAttemptId
+      : null;
+
     // Upsert finding record
     const stepsJson = packet.steps ? JSON.stringify(packet.steps) : null;
     database
@@ -89,7 +97,7 @@ export function indexRunFindings(
       .run(
         packet.findingId,
         runId,
-        packet.initialAttemptId ?? null,
+        indexedAttemptId,
         packet.title,
         packet.severity,
         packet.category ?? null,
