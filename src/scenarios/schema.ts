@@ -29,8 +29,12 @@ export type ScenarioAction =
 export type ScenarioAssertion =
   | { assertion: 'page_contains_capture'; capture: string }
   | { assertion: 'url_matches'; pattern: string }
-  | { assertion: 'element_visible'; role?: string; name?: string; selector?: string }
+  | { assertion: 'element_visible'; role?: string; name?: string; selector?: string; text?: string }
+  | { assertion: 'element_in_viewport'; text?: string; selector?: string }
   | { assertion: 'text_present'; text: string }
+  | { assertion: 'no_console_errors'; ignorePatterns?: string[] }
+  | { assertion: 'no_failed_requests'; ignorePatterns?: string[] }
+  | { assertion: 'no_server_errors'; ignorePatterns?: string[] }
   | { assertion: 'state_equals'; path: string; expected: unknown };
 
 /** Trajectory constraints. */
