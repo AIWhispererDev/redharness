@@ -142,8 +142,14 @@ export function checkMcpToolPolicy(
   }
 
   // Token passthrough
-  if (params.token !== undefined && !policy.allowMcpTokenPassthrough) {
-    return { allowed: false, reason: 'Token passthrough is disabled by operational policy' };
+  if (
+    (params.token !== undefined || params.sessionId !== undefined)
+    && !policy.allowMcpTokenPassthrough
+  ) {
+    return {
+      allowed: false,
+      reason: 'Token or session passthrough is disabled by operational policy',
+    };
   }
 
   return { allowed: true };

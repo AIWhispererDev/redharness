@@ -55,7 +55,7 @@ export type McpServerConfig = {
   /** Runs base directory. Defaults to ./runs. */
   runsBaseDir?: string;
   /** Operational policy (overrides legacy boolean flags). */
-  policy?: OperationalPolicy;
+  policy?: Partial<OperationalPolicy>;
 };
 
 export type McpToolRequest = {
@@ -89,7 +89,13 @@ export class McpServer {
     // Resolve operational policy
     let policy: OperationalPolicy;
     if (config.policy) {
-      policy = operationalPolicySchema.parse(config.policy) as OperationalPolicy;
+      policy = operationalPolicySchema.parse({
+        ...config.policy,
+        allowMcpRunOperations:
+          config.policy.allowMcpRunOperations
+          ?? config.allowRunOperations
+          ?? false,
+      }) as OperationalPolicy;
     } else {
       policy = {
         ...DEFAULT_OPERATIONAL_POLICY,
