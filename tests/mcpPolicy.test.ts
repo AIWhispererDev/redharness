@@ -111,14 +111,14 @@ if (hasSqlite) {
       const server = new McpServer({
         allowRunOperations: true,
         policy: {
-          mcp: { profiles: ['smoke'] },
+          mcp: { profiles: ['release'] },
         },
         runsBaseDir: '/tmp/mcp-policy-profile-test',
       });
 
       const resp = await server.handleTool({
         method: 'qa_start_run',
-        params: { pack: 'fixture-web', profile: 'smoke' },
+        params: { pack: 'fixture-web', profile: 'release' },
       });
 
       // Profile is allowed; remaining results depend on fixture/web startup

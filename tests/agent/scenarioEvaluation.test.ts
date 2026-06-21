@@ -20,7 +20,8 @@ import { runAgentTrial } from '../../src/scenarios/agentActor.js';
 import type { ScenarioDefinition } from '../../src/scenarios/schema.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mkdir, writeFile, readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const fixturePackDir = path.resolve(__dirname, '..', '..', 'packs', 'fixture-agent');
@@ -431,7 +432,7 @@ describe('finding candidate lifecycle from agent evaluation', () => {
     const { writeFindingPacketV2 } = await import('../../src/findingPackets.js');
     const { ArtifactStore } = await import('../../src/artifacts/artifactStore.js');
 
-    const outputDir = path.resolve(__dirname, '..', '..', 'runs', 'test-findings', Date.now().toString());
+    const outputDir = await mkdtemp(path.join(tmpdir(), 'agent-finding-'));
     await mkdir(outputDir, { recursive: true });
     const store = new ArtifactStore(outputDir);
 
@@ -464,5 +465,6 @@ describe('finding candidate lifecycle from agent evaluation', () => {
         expect(finding.packet.steps.length).toBeGreaterThan(0);
       }
     }
+    await rm(outputDir, { recursive: true, force: true });
   });
 });

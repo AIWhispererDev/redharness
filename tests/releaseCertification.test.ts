@@ -282,7 +282,10 @@ if (hasSqlite) {
     });
 
     it('retrieves baselines through MCP', async () => {
-      const server = new McpServer({ allowRunOperations: false });
+      const server = new McpServer({
+        allowRunOperations: false,
+        runsBaseDir: join(tmpdir(), `cert-mcp-baselines-${Date.now()}`),
+      });
       const res = JSON.parse(await server.handleRequest({
         jsonrpc: '2.0', id: 2, method: 'tools/call',
         params: { name: 'qa_list_baselines', arguments: {} },
@@ -291,7 +294,10 @@ if (hasSqlite) {
     });
 
     it('retrieves schema version through MCP', async () => {
-      const server = new McpServer({ allowRunOperations: false });
+      const server = new McpServer({
+        allowRunOperations: false,
+        runsBaseDir: join(tmpdir(), `cert-mcp-schema-${Date.now()}`),
+      });
       const res = JSON.parse(await server.handleRequest({
         jsonrpc: '2.0', id: 3, method: 'tools/call',
         params: { name: 'qa_get_schema_version', arguments: {} },

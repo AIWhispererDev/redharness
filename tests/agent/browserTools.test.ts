@@ -5,12 +5,23 @@
  * locator resolution, origin validation, security policies.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { BrowserSession } from '../../src/agent/browser/session.js';
 import { BrowserSessionManager } from '../../src/agent/browser/sessionManager.js';
 import { resolveLocatorForAction, validateLocatorRecipe } from '../../src/agent/browser/locator.js';
 import { isToolAllowedByProfile, isMutationAction, resolveSandboxProfile } from '../../src/agent/sandboxProfiles.js';
 import type { SandboxProfile } from '../../src/agent/agentTypes.js';
+import { startReleaseWebApp, type ReleaseFixture } from '../../src/fixtures/releaseWebApp.js';
+
+let fixture: ReleaseFixture;
+
+beforeAll(async () => {
+  fixture = await startReleaseWebApp();
+});
+
+afterAll(async () => {
+  await fixture.stop();
+});
 
 // ---------------------------------------------------------------------------
 // Locator resolution
@@ -115,7 +126,7 @@ describe.sequential('BrowserSession', () => {
 
   beforeEach(() => {
     session = new BrowserSession({
-      allowedOrigins: ['https://example.com', 'https://httpbin.org'],
+      allowedOrigins: [fixture.baseUrl],
       headless: true,
       navigationTimeoutMs: 10000,
     });
@@ -153,13 +164,13 @@ describe.sequential('BrowserSession', () => {
   });
 
   it('navigates to an allowed origin', async () => {
-    const snapshot = await session.navigate('https://example.com');
-    expect(snapshot.url).toContain('example.com');
+    const snapshot = await session.navigate(fixture.baseUrl);
+    expect(snapshot.url).toContain(new URL(fixture.baseUrl).host);
     expect(snapshot.title).toBeDefined();
   });
 
   it('returns a valid snapshot after navigation', async () => {
-    const snapshot = await session.navigate('https://example.com');
+    const snapshot = await session.navigate(fixture.baseUrl);
     expect(snapshot).toHaveProperty('url');
     expect(snapshot).toHaveProperty('title');
     expect(snapshot).toHaveProperty('viewport');
@@ -168,7 +179,7 @@ describe.sequential('BrowserSession', () => {
   });
 
   it('returns visible text excluding hidden content', async () => {
-    const snapshot = await session.navigate('https://example.com');
+    const snapshot = await session.navigate(fixture.baseUrl);
     const text = await session.visibleText();
     expect(text.length).toBeGreaterThan(0);
     // The visible text should not contain hidden elements' content
@@ -177,7 +188,7 @@ describe.sequential('BrowserSession', () => {
   });
 
   it('takes a base64-encoded screenshot', async () => {
-    await session.navigate('https://example.com');
+    await session.navigate(fixture.baseUrl);
     const screenshot = await session.screenshot();
     // Base64-encoded PNG starts with iVBOR
     expect(screenshot).toMatch(/^[A-Za-z0-9+/=]+$/);
@@ -197,9 +208,8 @@ describe.sequential('BrowserSession', () => {
   });
 
   it('isOriginAllowed returns true for allowed origins', () => {
-    expect(session.isOriginAllowed('https://example.com')).toBe(true);
-    expect(session.isOriginAllowed('https://example.com/page')).toBe(true);
-    expect(session.isOriginAllowed('https://httpbin.org/get')).toBe(true);
+    expect(session.isOriginAllowed(fixture.baseUrl)).toBe(true);
+    expect(session.isOriginAllowed(`${fixture.baseUrl}/page`)).toBe(true);
   });
 
   it('isOriginAllowed returns false for disallowed origins', () => {
@@ -250,7 +260,7 @@ describe('BrowserSessionManager', () => {
   it('creates and retrieves sessions by run ID', async () => {
     const mgr = BrowserSessionManager.getInstance();
     const session = await mgr.createSession('test-run', {
-      allowedOrigins: ['https://example.com'],
+      allowedOrigins: [fixture.baseUrl],
     });
     expect(mgr.getSession('test-run')).toBe(session);
     expect(mgr.getActiveRunIds()).toEqual(['test-run']);
@@ -258,16 +268,16 @@ describe('BrowserSessionManager', () => {
 
   it('throws on duplicate session creation', async () => {
     const mgr = BrowserSessionManager.getInstance();
-    await mgr.createSession('dup-run', { allowedOrigins: ['https://example.com'] });
+    await mgr.createSession('dup-run', { allowedOrigins: [fixture.baseUrl] });
     await expect(
-      mgr.createSession('dup-run', { allowedOrigins: ['https://example.com'] }),
+      mgr.createSession('dup-run', { allowedOrigins: [fixture.baseUrl] }),
     ).rejects.toThrow(/already exists/);
   });
 
   it('closes sessions by run ID', async () => {
     const mgr = BrowserSessionManager.getInstance();
-    await mgr.createSession('run-a', { allowedOrigins: ['https://example.com'] });
-    await mgr.createSession('run-b', { allowedOrigins: ['https://example.com'] });
+    await mgr.createSession('run-a', { allowedOrigins: [fixture.baseUrl] });
+    await mgr.createSession('run-b', { allowedOrigins: [fixture.baseUrl] });
     await mgr.closeSession('run-a');
 
     expect(mgr.getSession('run-a')).toBeUndefined();
@@ -282,8 +292,8 @@ describe('BrowserSessionManager', () => {
 
   it('closeAll closes every session', async () => {
     const mgr = BrowserSessionManager.getInstance();
-    await mgr.createSession('run-a', { allowedOrigins: ['https://example.com'] });
-    await mgr.createSession('run-b', { allowedOrigins: ['https://example.com'] });
+    await mgr.createSession('run-a', { allowedOrigins: [fixture.baseUrl] });
+    await mgr.createSession('run-b', { allowedOrigins: [fixture.baseUrl] });
     await mgr.closeAll();
 
     expect(mgr.getActiveRunIds()).toEqual([]);
@@ -291,7 +301,7 @@ describe('BrowserSessionManager', () => {
 
   it('reset clears all sessions', async () => {
     const mgr = BrowserSessionManager.getInstance();
-    await mgr.createSession('test-run', { allowedOrigins: ['https://example.com'] });
+    await mgr.createSession('test-run', { allowedOrigins: [fixture.baseUrl] });
     BrowserSessionManager.reset();
     expect(BrowserSessionManager.getInstance().getActiveRunIds()).toEqual([]);
   });

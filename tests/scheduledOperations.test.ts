@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { exportSpans } from '../src/exporters/otel.js';
 import type { TraceSpan } from '../src/trace/traceTypes.js';
+import { startReleaseWebApp } from '../src/fixtures/releaseWebApp.js';
 
 const hasSqlite = Number(process.version.slice(1).split('.')[0]) >= 22;
 
@@ -39,26 +40,29 @@ if (hasSqlite) {
   describe('Scheduled non-interactive run', () => {
     it('runs a scheduled evaluation with fixture-release profile', async () => {
       const runsDir = mkdtempSync(join(tmpdir(), 'scheduled-'));
+      const fixture = await startReleaseWebApp();
       const service = new HarnessService({
         runsBaseDir: runsDir,
       });
+      try {
+        const result = await service.startRun({
+          packId: 'fixture-web',
+          profile: 'release',
+          workers: 1,
+          headless: true,
+          source: 'scheduled',
+          baseUrl: fixture.baseUrl,
+        });
 
-      const result = await service.startRun({
-        packId: 'fixture-web',
-        profile: 'release',
-        workers: 1,
-        headless: true,
-        source: 'scheduled',
-        baseUrl: 'http://127.0.0.1:0',
-      });
-
-      expect(result.manifest.source).toBe('scheduled');
-      expect(result.manifest.profile).toBe('release');
-      expect(result.manifest.status).toBe('passed');
-      expect(result.runDir).toBeTruthy();
-
-      // Cleanup
-      await rm(runsDir, { recursive: true, force: true });
+        expect(result.manifest.source).toBe('scheduled');
+        expect(result.manifest.profile).toBe('release');
+        expect(result.manifest.status).toBe('passed');
+        expect(result.runDir).toBeTruthy();
+      } finally {
+        service.close();
+        await fixture.stop();
+        await rm(runsDir, { recursive: true, force: true });
+      }
     }, 30000);
 
     it('runs a scheduled run with explicit suite selection', async () => {
@@ -81,31 +85,42 @@ if (hasSqlite) {
       expect(result.runId).toBeTruthy();
       expect(result.runDir).toBeTruthy();
 
+      await service.cancelRun(result.runId);
+      for (let i = 0; i < 50; i++) {
+        const { manifest, entry } = await service.getRun(result.runId);
+        if (manifest?.endedAt && entry) break;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+
       // Cleanup
+      service.close();
       await rm(runsDir, { recursive: true, force: true });
     }, 30000);
 
     it('returns run status for a scheduled run', async () => {
       const runsDir = mkdtempSync(join(tmpdir(), 'scheduled-status-'));
+      const fixture = await startReleaseWebApp();
       const service = new HarnessService({
         runsBaseDir: runsDir,
       });
+      try {
+        const result = await service.startRun({
+          packId: 'fixture-web',
+          profile: 'release',
+          headless: true,
+          source: 'scheduled',
+          baseUrl: fixture.baseUrl,
+        });
 
-      const result = await service.startRun({
-        packId: 'fixture-web',
-        profile: 'release',
-        headless: true,
-        source: 'scheduled',
-        baseUrl: 'http://127.0.0.1:0',
-      });
-
-      const { manifest } = await service.getRun(result.runId);
-      expect(manifest).toBeTruthy();
-      expect(manifest!.source).toBe('scheduled');
-      expect(manifest!.status).toBe('passed');
-
-      // Cleanup
-      await rm(runsDir, { recursive: true, force: true });
+        const { manifest } = await service.getRun(result.runId);
+        expect(manifest).toBeTruthy();
+        expect(manifest!.source).toBe('scheduled');
+        expect(manifest!.status).toBe('passed');
+      } finally {
+        service.close();
+        await fixture.stop();
+        await rm(runsDir, { recursive: true, force: true });
+      }
     }, 30000);
   });
 
@@ -417,6 +432,7 @@ if (hasSqlite) {
       expect(cancelled).toBe(true);
 
       // Cleanup
+      service.close();
       await rm(runsDir, { recursive: true, force: true });
     }, 30000);
   });

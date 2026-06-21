@@ -274,6 +274,26 @@ if (hasSqlite) {
         steps: ['Open form', 'Click submit without filling code'],
       };
 
+      db.prepare(`INSERT INTO runs (
+        run_id, pack_id, status, source, started_at, suite_count,
+        passed_count, failed_count, skipped_count, error_count,
+        cancelled_count, run_dir
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(
+          'test-run-001',
+          'test-pack',
+          'failed',
+          'local',
+          '2026-06-01T00:00:00.000Z',
+          1,
+          0,
+          1,
+          0,
+          0,
+          0,
+          runDir,
+        );
+
       writeFileSync(join(findingDir, 'finding.json'), JSON.stringify(packet, null, 2));
 
       const count = indexRunFindings(db, 'test-run-001', runDir);
@@ -316,6 +336,26 @@ if (hasSqlite) {
     it('queries findings by run ID', () => {
       const db = new DatabaseSync(':memory:');
       applyMigrations(db, ALL_MIGRATIONS_LIST);
+
+      db.prepare(`INSERT INTO runs (
+        run_id, pack_id, status, source, started_at, suite_count,
+        passed_count, failed_count, skipped_count, error_count,
+        cancelled_count, run_dir
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(
+          'run-1',
+          'test-pack',
+          'failed',
+          'local',
+          '2026-06-01T00:00:00.000Z',
+          1,
+          0,
+          1,
+          0,
+          0,
+          0,
+          '/tmp/run-1',
+        );
 
       db.prepare(`INSERT INTO findings (
         finding_id, run_id, title, severity, category, lifecycle_state,
