@@ -46,7 +46,7 @@ export type OtelExportResult = {
 export function mapSpanToOtelAttributes(span: TraceSpan): Record<string, string | number | boolean> {
   const attrs: Record<string, string | number | boolean> = {
     'gen_ai.operation.name': mapKindToOperation(span.kind),
-    'gen_ai.system': 'qa-harness',
+    'gen_ai.system': 'redharness',
     'span.kind': span.kind,
     'span.status': span.status,
     'trace.id': span.traceId,
@@ -175,14 +175,14 @@ export async function exportSpans(
       resource: {
         attributes: [{
           key: 'service.name',
-          value: { stringValue: options.serviceName ?? 'qa-harness' },
+          value: { stringValue: options.serviceName ?? 'redharness' },
         }, {
-          key: 'qa_harness.exporter.version',
+          key: 'redharness.exporter.version',
           value: { stringValue: options.exporterVersion ?? '1' },
         }],
       },
       scopeSpans: [{
-        scope: { name: 'qa-harness', version: options.exporterVersion ?? '1' },
+        scope: { name: 'redharness', version: options.exporterVersion ?? '1' },
         spans: redactedSpans.map(toOtlpSpan),
       }],
     }],

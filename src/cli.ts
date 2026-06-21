@@ -80,8 +80,8 @@ async function loadProfiles(packDir: string): Promise<Record<string, ProfileConf
 }
 
 program
-  .name('qa-harness')
-  .description('General QA harness with app-specific QA packs')
+  .name('redharness')
+  .description('Agent evaluation, regression, and safe red-team security harness with app-specific QA packs')
   .version('0.1.0');
 
 // ===========================================================================

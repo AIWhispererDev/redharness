@@ -949,7 +949,7 @@ export class McpServer {
         result: {
           protocolVersion: '2025-03-26',
           capabilities: { tools: {}, resources: {} },
-          serverInfo: { name: 'qa-harness', version: '1.0.0' },
+          serverInfo: { name: 'redharness', version: '1.0.0' },
         },
       });
     }

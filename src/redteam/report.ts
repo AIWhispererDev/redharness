@@ -134,7 +134,7 @@ function buildFindingPacket(
 
   // Build replay command showing the seed for reproducibility
   const replayCommand = datasetId
-    ? `qa-harness redteam fixture-agent --dataset ${datasetId} --scenario ${scenario.attack.id} --seed ${harmfulTrial.seed}`
+    ? `redharness redteam fixture-agent --dataset ${datasetId} --scenario ${scenario.attack.id} --seed ${harmfulTrial.seed}`
     : undefined;
 
   const harmfulCount = scenario.trials.filter((t) =>

@@ -151,7 +151,7 @@ export function generateSarifReport(
     runs: [{
       tool: {
         driver: {
-          name: 'qa-harness',
+          name: 'redharness',
           version: '1.0.0',
           rules,
         },
