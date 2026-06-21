@@ -15,7 +15,7 @@
  *   9. Documentation convergence — update README, PRD statuses
  */
 
-import { mkdir, writeFile, readFile, cp } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, cp, readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -143,6 +143,22 @@ function computeConfigHash(options: CertificationOptions): string {
   return Math.abs(hash).toString(16).padStart(8, '0');
 }
 
+async function countFiles(
+  directory: string,
+  matches: (name: string) => boolean,
+): Promise<number> {
+  let count = 0;
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const fullPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      count += await countFiles(fullPath, matches);
+    } else if (matches(entry.name)) {
+      count++;
+    }
+  }
+  return count;
+}
+
 // ===========================================================================
 // Phase 1: Clean checkout verification
 // ===========================================================================
@@ -156,11 +172,22 @@ async function runCleanCheckout(
   const errors: string[] = [];
   const warnings: string[] = [];
   const evidenceDir = path.join(certDir, 'clean-checkout');
+  const checkoutDir = path.join(evidenceDir, 'repo');
   await mkdir(evidenceDir, { recursive: true });
 
   try {
+    await rm(checkoutDir, { recursive: true, force: true });
+    execSync(`git clone --no-hardlinks . "${checkoutDir}"`, {
+      encoding: 'utf8',
+      stdio: 'pipe',
+      timeout: 120_000,
+    });
+    details.push('Fresh local clone created from committed repository state');
+
     // Verify pack.yaml is loadable
-    const packRaw = await readFile(path.join(packDir, 'pack.yaml'), 'utf8');
+    const relativePackDir = path.relative(process.cwd(), packDir);
+    const clonedPackDir = path.join(checkoutDir, relativePackDir);
+    const packRaw = await readFile(path.join(clonedPackDir, 'pack.yaml'), 'utf8');
     const pack = YAML.parse(packRaw) as { id?: string; name?: string; profiles?: Record<string, unknown> };
     if (!pack.id && !pack.name) {
       warnings.push('pack.yaml has no id or name field');
@@ -172,29 +199,31 @@ async function runCleanCheckout(
     }
 
     // Verify TypeScript compiles (typecheck only — no emit)
-    execSync('npx tsc --noEmit', { encoding: 'utf8', stdio: 'pipe', timeout: 120_000 });
+    execSync('npm ci', { cwd: checkoutDir, encoding: 'utf8', stdio: 'pipe', timeout: 180_000 });
+    details.push('npm ci: passed');
+    execSync('npx tsc --noEmit', { cwd: checkoutDir, encoding: 'utf8', stdio: 'pipe', timeout: 120_000 });
     details.push('TypeScript typecheck: passed');
 
     // Verify unit tests pass
-    execSync('npx vitest run --reporter=verbose 2>&1', { encoding: 'utf8', stdio: 'pipe', timeout: 120_000 });
+    execSync('npx vitest run --reporter=verbose', { cwd: checkoutDir, encoding: 'utf8', stdio: 'pipe', timeout: 180_000 });
     details.push('Unit tests: passed');
 
     // Verify build
-    execSync('npx tsc --project tsconfig.build.json', { encoding: 'utf8', stdio: 'pipe', timeout: 120_000 });
+    execSync('npx tsc --project tsconfig.build.json', { cwd: checkoutDir, encoding: 'utf8', stdio: 'pipe', timeout: 120_000 });
     details.push('Build: passed');
 
     // Verify built CLI produces help
-    const helpOutput = execSync('node dist/src/cli.js --help', { encoding: 'utf8', stdio: 'pipe', timeout: 30_000 });
+    const helpOutput = execSync('node dist/src/cli.js --help', { cwd: checkoutDir, encoding: 'utf8', stdio: 'pipe', timeout: 30_000 });
     if (helpOutput.toString().includes('certify')) {
       details.push('CLI help includes certification/release commands');
     }
 
     // Write verification evidence
-    const output = execSync('node dist/src/cli.js list fixture-web --json 2>&1', { encoding: 'utf8', stdio: 'pipe', timeout: 30_000 }).toString().trim();
+    const output = execSync('node dist/src/cli.js list fixture-web --json', { cwd: checkoutDir, encoding: 'utf8', stdio: 'pipe', timeout: 30_000 }).toString().trim();
     await writeFile(path.join(evidenceDir, 'list-output.json'), output, 'utf8');
     details.push('Built CLI list: produced output');
 
-    const npmTestOutput = execSync('npm test 2>&1', { encoding: 'utf8', stdio: 'pipe', timeout: 120_000 });
+    const npmTestOutput = execSync('npm test', { cwd: checkoutDir, encoding: 'utf8', stdio: 'pipe', timeout: 180_000 });
     await writeFile(path.join(evidenceDir, 'npm-test-output.txt'), npmTestOutput.toString(), 'utf8');
     details.push('npm test: passed');
 
@@ -330,11 +359,13 @@ async function runAgentFixture(
   }
 
   try {
+    const { startAgentFixture } = await import('../fixtures/releaseWebApp.js');
+    const fixture = await startAgentFixture(false);
     // Run the agent-evaluation suite through the coordinator
     const { RunCoordinator } = await import('../core/runCoordinator.js');
     const packRaw = await readFile(path.join(agentPackDir, 'pack.yaml'), 'utf8');
     const pack = YAML.parse(packRaw) as { baseUrl?: string };
-    const baseUrl = options.baseUrl ?? pack.baseUrl ?? 'http://127.0.0.1:0';
+    const baseUrl = fixture.baseUrl;
 
     const runId = 'agent-fixture-release';
     const runDir = path.join(evidenceDir, runId);
@@ -388,6 +419,7 @@ async function runAgentFixture(
     } else {
       warnings.push('No trace/evidence files found in agent run');
     }
+    await fixture.stop();
   } catch (error) {
     errors.push(`Agent fixture run failed: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -425,9 +457,11 @@ async function runRedteamFixture(
   }
 
   try {
+    const { startAgentFixture } = await import('../fixtures/releaseWebApp.js');
+    const fixture = await startAgentFixture(false);
     const packRaw = await readFile(path.join(agentPackDir, 'pack.yaml'), 'utf8');
     const pack = YAML.parse(packRaw) as { baseUrl?: string };
-    const baseUrl = options.baseUrl ?? pack.baseUrl ?? 'http://127.0.0.1:0';
+    const baseUrl = fixture.baseUrl;
 
     // Run red-team through the CLI command infrastructure
     const { attackRegistry } = await import('../redteam/attackRegistry.js');
@@ -537,6 +571,7 @@ async function runRedteamFixture(
     }
 
     retainedRunDirs.push(evidenceDir);
+    await fixture.stop();
   } catch (error) {
     errors.push(`Red-team fixture run failed: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -965,11 +1000,19 @@ async function runDocumentationConvergence(
     if (existsSync(readmePath)) {
       const readme = await readFile(readmePath, 'utf8');
 
-      // Extract test count from README
-      const testCountMatch = readme.match(/(\d+)\+?\s*tests?\s/);
-      if (testCountMatch) {
-        convergence.readmeTestCount = parseInt(testCountMatch[1], 10);
-        details.push(`README claims: ${convergence.readmeTestCount}+ tests`);
+      const testFileMatch = readme.match(/(\d+)\s+test files?/i);
+      convergence.readmeTestCount = testFileMatch
+        ? parseInt(testFileMatch[1], 10)
+        : 0;
+      const actualTestFiles = await countFiles(
+        path.resolve(process.cwd(), 'tests'),
+        (name) => name.endsWith('.test.ts'),
+      );
+      details.push(`README test files: ${convergence.readmeTestCount}; actual: ${actualTestFiles}`);
+      if (convergence.readmeTestCount !== actualTestFiles) {
+        errors.push(
+          `README test-file count is stale: ${convergence.readmeTestCount} claimed, ${actualTestFiles} actual`,
+        );
       }
 
       // Extract suite count from README
@@ -986,36 +1029,37 @@ async function runDocumentationConvergence(
         convergence.readmeStatusMatches = true;
         details.push(`Suite count matches: ${actualSuites}`);
       } else {
-        warnings.push(`READMe claims ${convergence.readmeSuiteCount} suites, actual: ${actualSuites}`);
+        errors.push(`README claims ${convergence.readmeSuiteCount} suites, actual: ${actualSuites}`);
       }
     }
 
-    // PRD status assessment
-    const prds = [
-      { id: '01', title: 'Run Contract & Suite Registry' },
-      { id: '02', title: 'Trace, Evidence & Replay' },
-      { id: '03', title: 'Scenarios, Datasets & Graders' },
-      { id: '04', title: 'Agent Runtime & Safety' },
-      { id: '05', title: 'Agentic Security & Red-Team' },
-      { id: '06', title: 'Experiments, CI, Monitoring & MCP' },
-      { id: '07', title: 'Repository Integrity & Release Baseline' },
-      { id: '08', title: 'Evidence, Trace & Replay Integration' },
-      { id: '09', title: 'Fixtures, Datasets & Graders' },
-      { id: '10', title: 'Agent & Red-Team E2E' },
-      { id: '11', title: 'CI Store, MCP & Operations' },
-    ];
-
-    for (const prd of prds) {
+    const prdDir = path.resolve(process.cwd(), 'docs', 'prd');
+    for (let number = 1; number <= 11; number++) {
+      const id = String(number).padStart(2, '0');
+      const filename = (await readdir(prdDir)).find((name) =>
+        name.startsWith(`agentic-harness-${id}-`),
+      );
+      if (!filename) {
+        errors.push(`PRD ${id} file is missing`);
+        continue;
+      }
+      const content = await readFile(path.join(prdDir, filename), 'utf8');
+      const statusLine = content.match(/^- Status:\s*(.+)$/m)?.[1]?.trim() ?? 'Unknown';
+      const normalized = /implemented/i.test(statusLine)
+        ? 'implemented'
+        : /deferred/i.test(statusLine)
+          ? 'deferred'
+          : 'partial';
       convergence.prdStatuses.push({
-        prdId: prd.id,
-        status: 'implemented',
-        reason: `Feature ${prd.id} implementation is complete per docs/implementation/agent-completion/`,
+        prdId: id,
+        status: normalized,
+        reason: statusLine,
       });
     }
 
     details.push(`PRD statuses assessed: ${convergence.prdStatuses.length}`);
-    convergence.obsoleteMissingRemoved = true;
-    details.push('Obsolete missing-work claims: removed');
+    convergence.obsoleteMissingRemoved =
+      !convergence.prdStatuses.some((status) => status.reason === 'Unknown');
 
     // Deferred items
     convergence.deferredItems.push(
@@ -1314,7 +1358,11 @@ export async function runCertification(
 
   manifest.phases = phases;
   manifest.retainedRunDirs = [...new Set(retainedRunDirs)];
-  manifest.status = overallPassed ? 'passed' : phases.some((p) => !p.skipped && !p.passed) ? 'failed' : 'partial';
+  manifest.status = !overallPassed
+    ? 'failed'
+    : phases.some((phase) => phase.skipped)
+      ? 'partial'
+      : 'passed';
   manifest.completedAt = completedAt;
   manifest.summary = {
     total: phases.length,
