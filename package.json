@@ -1,6 +1,6 @@
 {
   "name": "redharness",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Agent evaluation, regression, & safe red-team security harness with app-specific QA packs",
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -14,7 +14,16 @@
     "save-auth": "tsx src/saveAuth.ts",
     "save-auth-cdp": "tsx src/saveAuthFromCdp.ts"
   },
-  "keywords": ["qa", "testing", "regression", "security", "pentest", "red-team", "agent-evaluation", "agentic-testing"],
+  "keywords": [
+    "qa",
+    "testing",
+    "regression",
+    "security",
+    "pentest",
+    "red-team",
+    "agent-evaluation",
+    "agentic-testing"
+  ],
   "author": "AIWhispererDev",
   "license": "MIT",
   "type": "module",
