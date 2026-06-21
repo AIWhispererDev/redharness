@@ -13,6 +13,7 @@ import { readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import YAML from 'yaml';
 import { registry } from '../core/suiteRegistry.js';
+import { registerAllSuites } from '../suites/registerSuites.js';
 import { RunCoordinator } from '../core/runCoordinator.js';
 import { loadManifest, computeConfigHash } from '../core/resumeStore.js';
 import { RunCatalog } from '../store/catalog.js';
@@ -66,10 +67,14 @@ export class HarnessService {
   private agentRunService: AgentRunService;
 
   constructor(options: ServiceOptions = {}) {
+    registerAllSuites();
     this.options = {
       packsDir: options.packsDir ?? path.resolve(process.cwd(), 'packs'),
       runsBaseDir: options.runsBaseDir ?? path.resolve(process.cwd(), 'runs'),
-      catalogBaseDir: options.catalogBaseDir ?? process.cwd(),
+      catalogBaseDir:
+        options.catalogBaseDir
+        ?? options.runsBaseDir
+        ?? path.resolve(process.cwd(), 'runs'),
     };
     this.catalog = new RunCatalog(this.options.catalogBaseDir);
     this.agentRunService = new AgentRunService({ runsBaseDir: this.options.runsBaseDir });
@@ -83,6 +88,11 @@ export class HarnessService {
   /** Get the catalog instance for direct queries. */
   getCatalog(): RunCatalog {
     return this.catalog;
+  }
+
+  /** Release catalog resources held by this service instance. */
+  close(): void {
+    this.catalog.close();
   }
 
   // ---------------------------------------------------------------------------

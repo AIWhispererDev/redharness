@@ -58,6 +58,15 @@ export function compareRuns(
   candidate: CandidateRunResult,
   options: CompareOptions,
 ): RunComparison {
+  if (!options.allowIncompatibleDatasets) {
+    const compatibilityErrors = validateDatasetCompatibility(baseline, candidate);
+    if (compatibilityErrors.length > 0) {
+      throw new Error(
+        `Cannot compare incompatible datasets: ${compatibilityErrors.join('; ')}`,
+      );
+    }
+  }
+
   const scenarioComparisons: ScenarioComparison[] = [];
   const aggregateDeltas: Record<string, number> = {};
 
