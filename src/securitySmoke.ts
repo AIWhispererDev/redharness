@@ -43,7 +43,44 @@ export async function runSecuritySmoke(pack: QaPack, options: { storageState?: s
     const cookieHeaders = Object.entries(headers).filter(([key]) => key.toLowerCase() === 'set-cookie').map(([, value]) => value);
     const cookieText = cookieHeaders.join('\n');
     const sessionCookieObserved = /session|auth|clerk|token/i.test(cookieText);
-    checks.push(securityCheck('Session cookies use Secure/SameSite when observable', !sessionCookieObserved || (/secure/i.test(cookieText) && /samesite/i.test(cookieText)), [sessionCookieObserved ? cookieText.slice(0, 300) : 'No session-like Set-Cookie observed on main response'], 'medium', 'cookies'));
+    checks.push(securityCheck(
+      'Session cookies use Secure/HttpOnly/SameSite when observable',
+      !sessionCookieObserved
+        || (
+          /secure/i.test(cookieText)
+          && /httponly/i.test(cookieText)
+          && /samesite/i.test(cookieText)
+        ),
+      [sessionCookieObserved ? cookieText.slice(0, 300) : 'No session-like Set-Cookie observed on main response'],
+      'medium',
+      'cookies',
+    ));
+
+    const corsOrigin = 'https://qa-harness.invalid';
+    const corsResponse = await page.request.fetch(pack.baseUrl, {
+      method: 'OPTIONS',
+      headers: {
+        origin: corsOrigin,
+        'access-control-request-method': 'GET',
+      },
+      timeout: 15_000,
+    }).catch(() => null);
+    const corsHeaders = corsResponse?.headers() ?? {};
+    const allowOrigin = corsHeaders['access-control-allow-origin'];
+    const allowCredentials = corsHeaders['access-control-allow-credentials'];
+    const unsafeCors = allowOrigin === '*'
+      && String(allowCredentials).toLowerCase() === 'true';
+    checks.push(securityCheck(
+      'CORS preflight does not allow wildcard credentials',
+      !unsafeCors,
+      [
+        `status ${corsResponse?.status() ?? 'unavailable'}`,
+        `access-control-allow-origin: ${allowOrigin ?? '(absent)'}`,
+        `access-control-allow-credentials: ${allowCredentials ?? '(absent)'}`,
+      ],
+      'high',
+      'cors',
+    ));
 
     for (const route of ['/.env', '/.git/config']) {
       const res = await page.request.get(joinUrl(pack.baseUrl, route), { timeout: 15_000 });
@@ -85,6 +122,11 @@ export async function runSecuritySmoke(pack: QaPack, options: { storageState?: s
     await saveJson(outputDir, artifacts, 'bundle-findings.json', bundleFindings);
     checks.push(securityCheck('Public bundles do not expose obvious private secrets', bundleFindings.filter((f) => f.match !== 'public sourcemap').length === 0, bundleFindings.map((f) => `${f.match} at ${f.url}`).slice(0, 5).concat(bundleFindings.length ? [] : ['none']), 'high', 'bundle'));
 
+    const screenshotPath = path.join(outputDir, 'landing.png');
+    await page.screenshot({ path: screenshotPath, fullPage: true });
+    artifacts.push(screenshotPath);
+    await saveJson(outputDir, artifacts, 'responses.json', responses);
+
     if (options.writeFindings) {
       for (const failed of checks.filter((c) => !c.ok && securitySeverityRank(c.severity) >= 2)) {
         const packet = await writeFindingPacket({
@@ -103,6 +145,16 @@ export async function runSecuritySmoke(pack: QaPack, options: { storageState?: s
         artifacts.push(packet.markdownPath, packet.jsonPath, packet.replayPath);
       }
     }
+    const result: SecuritySmokeResult = {
+      ok: checks.every((c) => c.ok),
+      skipped: false,
+      checks,
+      artifacts,
+    };
+    await saveJson(outputDir, artifacts, 'summary.json', result);
+    const summaryPath = path.join(outputDir, 'summary.md');
+    await writeFile(summaryPath, renderSecuritySmokeReport(pack.name, result), 'utf8');
+    artifacts.push(summaryPath);
     await context.close();
   } finally {
     await browser.close();
