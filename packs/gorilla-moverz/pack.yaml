@@ -1,0 +1,31 @@
+id: gorilla-moverz
+name: Gorilla Moverz Banana Farm
+type: web
+baseUrl: https://farm.gorilla-moverz.xyz
+
+issueTypes:
+  - Functional Bug
+  - Security
+  - UI Bug
+
+severities:
+  Blocker: Blocks the experience
+  Major: Core path significantly degraded
+  Minor: Noticeable but workable
+  Polish: Cosmetic
+
+tracks: {}
+reports: {}
+rules: []
+
+profiles:
+  smoke:
+    includeTags: [smoke]
+
+smoke:
+  publicRoutes:
+    - path: /
+      titleIncludes: Banana Farm
+      textIncludes:
+        - Gorilla Moverz
+        - connect your wallet

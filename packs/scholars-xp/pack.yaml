@@ -1,0 +1,36 @@
+id: scholars-xp
+name: ScholarXP
+type: web
+baseUrl: https://scholars-xp.vercel.app
+
+issueTypes:
+  - Functional Bug
+  - Security
+  - UI Bug
+
+severities:
+  Blocker: Blocks the experience
+  Major: Core path significantly degraded
+  Minor: Noticeable but workable
+  Polish: Cosmetic
+
+tracks: {}
+reports: {}
+rules: []
+
+profiles:
+  smoke:
+    includeTags: [smoke]
+
+smoke:
+  publicRoutes:
+    - path: /
+      titleIncludes: ScholarXP
+      textIncludes:
+        - ScholarXP
+        - Submit Your Content
+    - path: /login
+      titleIncludes: ScholarXP
+      textIncludes:
+        - ScholarXP
+        - Sign in with Discord
